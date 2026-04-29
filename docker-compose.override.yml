@@ -1,0 +1,12 @@
+# Local development overrides
+# This file is gitignored and only used locally.
+# Copy to docker-compose.override.yml and adjust as needed.
+
+version: '3.8'
+
+services:
+  api:
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      # Override secrets here for local dev
+      # - JwtSettings__SecretKey=my-local-dev-key
