@@ -1,4 +1,3 @@
-using CleanArch.Application.Features.Users.Commands.CreateUser;
 using CleanArch.API.Authorization;
 using CleanArch.Application.Common.Interfaces;
 using CleanArch.Application.Features.Users.Queries.GetUser;
@@ -7,6 +6,10 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace CleanArch.API.Controllers;
 
+/// <summary>
+/// User management within the caller's tenant.
+/// All operations are tenant-scoped via the JWT — no cross-tenant access possible.
+/// </summary>
 [Authorize]
 public class UsersController : BaseApiController
 {
@@ -17,6 +20,10 @@ public class UsersController : BaseApiController
         _currentUser = currentUser;
     }
 
+    /// <summary>
+    /// Gets a user profile by ID, scoped to the caller's tenant.
+    /// Returns 404 if the user doesn't exist OR belongs to a different tenant.
+    /// </summary>
     [HttpGet("{id:guid}")]
     [Authorize(Policy = AuthorizationPolicies.RequireAuthenticated)]
     [ProducesResponseType(typeof(UserDto), StatusCodes.Status200OK)]
@@ -38,20 +45,5 @@ public class UsersController : BaseApiController
             });
 
         return Ok(result.Data);
-    }
-
-    [HttpPost]
-    [AllowAnonymous]
-    [ProducesResponseType(StatusCodes.Status201Created)]
-    [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
-    public async Task<IActionResult> CreateUser([FromBody] CreateUserCommand command, CancellationToken cancellationToken)
-    {
-        var result = await Mediator.Send(command, cancellationToken);
-
-        if (!result.Succeeded)
-            return BadRequest(result.Errors);
-
-        return CreatedAtAction(nameof(GetUser), new { id = result.Data }, result.Data);
     }
 }

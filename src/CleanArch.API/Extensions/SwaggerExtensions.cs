@@ -10,14 +10,10 @@ public static class SwaggerExtensions
         {
             options.SwaggerDoc("v1", new OpenApiInfo
             {
-                Title = "CleanArch API",
+                Title = "CleanArch Financial SaaS API",
                 Version = "v1",
-                Description = "A .NET 8 Web API built with Clean Architecture",
-                Contact = new OpenApiContact
-                {
-                    Name = "API Support",
-                    Email = "support@cleanarch.com"
-                }
+                Description = "Multi-tenant financial platform — invoicing and payment management.",
+                Contact = new OpenApiContact { Name = "API Support", Email = "support@cleanarch.example" }
             });
 
             // JWT Bearer auth in Swagger UI
@@ -28,7 +24,7 @@ public static class SwaggerExtensions
                 Scheme = "Bearer",
                 BearerFormat = "JWT",
                 In = ParameterLocation.Header,
-                Description = "Enter 'Bearer' followed by a space and your JWT token.\nExample: Bearer eyJhbGciOiJI..."
+                Description = "Enter: Bearer {your JWT token}"
             });
 
             options.AddSecurityRequirement(new OpenApiSecurityRequirement
@@ -36,17 +32,13 @@ public static class SwaggerExtensions
                 {
                     new OpenApiSecurityScheme
                     {
-                        Reference = new OpenApiReference
-                        {
-                            Type = ReferenceType.SecurityScheme,
-                            Id = "Bearer"
-                        }
+                        Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "Bearer" }
                     },
                     Array.Empty<string>()
                 }
             });
 
-            // Include XML comments if present
+            // Include XML comments from the API project (from GenerateDocumentationFile=true)
             var xmlFile = $"{System.Reflection.Assembly.GetExecutingAssembly().GetName().Name}.xml";
             var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
             if (File.Exists(xmlPath))
@@ -63,6 +55,7 @@ public static class SwaggerExtensions
         {
             options.SwaggerEndpoint("/swagger/v1/swagger.json", "CleanArch API v1");
             options.RoutePrefix = "swagger";
+            options.DisplayRequestDuration();
         });
 
         return app;
