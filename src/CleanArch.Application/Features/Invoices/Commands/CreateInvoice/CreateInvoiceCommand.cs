@@ -185,16 +185,11 @@ public sealed class CreateInvoiceCommandHandler : IRequestHandler<CreateInvoiceC
 
         // ── Step 6: Map to response DTO ───────────────────────────────────────
 
-        return Result<InvoiceResponse>.Success(MapToResponse(invoice));
+        return Result<InvoiceResponse>.Success(InvoiceMapper.ToResponse(invoice));
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Produces a human-readable, predictable invoice number.
-    /// Format: INV-{YYYY}-{NNNNNN} — year-scoped so the number resets each year,
-    /// and sequences don't balloon to 7+ digits for typical SaaS invoice volumes.
-    /// </summary>
     private static string FormatInvoiceNumber(int sequence)
         => $"INV-{DateTime.UtcNow.Year}-{sequence:D6}";
 
@@ -222,50 +217,4 @@ public sealed class CreateInvoiceCommandHandler : IRequestHandler<CreateInvoiceC
     /// Kept as an explicit mapping method rather than AutoMapper because
     /// the mapping includes computed properties and we want the compiler
     /// to catch any shape changes — invisible AutoMapper profile bugs are
-    /// particularly painful for financial data.
-    /// </summary>
-    private static InvoiceResponse MapToResponse(Invoice invoice) => new()
-    {
-        Id = invoice.Id,
-        InvoiceNumber = invoice.InvoiceNumber,
-        Status = invoice.Status.Value,
-        CustomerName = invoice.CustomerName,
-        CustomerEmail = invoice.CustomerEmail,
-        BillingAddress = invoice.BillingAddress is { } addr ? new InvoiceBillingAddressResponse
-        {
-            Line1 = addr.Line1,
-            Line2 = addr.Line2,
-            City = addr.City,
-            State = addr.State,
-            CountryCode = addr.CountryCode,
-            PostalCode = addr.PostalCode
-        } : null,
-        CreatedAt = invoice.CreatedAt,
-        IssuedAt = invoice.IssuedAt,
-        DueDate = invoice.DueDate,
-        PaidAt = invoice.PaidAt,
-        Currency = invoice.Currency,
-        TaxRatePercentage = invoice.TaxRatePercentage,
-        DiscountPercentage = invoice.DiscountPercentage,
-        Subtotal = invoice.Subtotal.Amount,
-        InvoiceDiscountAmount = invoice.InvoiceDiscountAmount.Amount,
-        DiscountedSubtotal = invoice.DiscountedSubtotal.Amount,
-        TaxAmount = invoice.TaxAmount.Amount,
-        TotalAmount = invoice.TotalAmount.Amount,
-        PaidAmount = invoice.PaidAmount.Amount,
-        OutstandingAmount = invoice.OutstandingAmount.Amount,
-        Notes = invoice.Notes,
-        CreatedByUserId = invoice.CreatedByUserId,
-        LineItems = invoice.LineItems.Select(li => new InvoiceLineItemResponse
-        {
-            Description = li.Description,
-            UnitPrice = li.UnitPrice.Amount,
-            Quantity = li.Quantity,
-            DiscountPercentage = li.DiscountPercentage,
-            ProductReference = li.ProductReference,
-            GrossAmount = li.GrossAmount.Amount,
-            DiscountAmount = li.DiscountAmount.Amount,
-            NetAmount = li.NetAmount.Amount
-        }).ToList()
-    };
 }

@@ -11,6 +11,25 @@ using Microsoft.IdentityModel.Tokens;
 
 namespace CleanArch.Infrastructure.Identity;
 
+/// <summary>
+/// Generates and validates JWTs with tenant, role, and user identity claims.
+///
+/// JWT payload claims:
+///   sub              — user GUID (maps to ClaimTypes.NameIdentifier)
+///   email            — user email
+///   role             — UserRole name: "Viewer", "Member", "Admin", "SuperAdmin"
+///   name             — "FirstName LastName"
+///   tenant_id        — tenant GUID (read by CurrentUserService per-request; avoids DB hit)
+///   tenant_currency  — tenant default ISO 4217 currency (e.g. "USD")
+///   jti              — unique token ID per issuance (future: revocation list)
+///   exp / nbf / iat  — standard time claims
+///   iss / aud        — validated on every request by JwtBearerMiddleware
+///
+/// Token lifetime: exactly 60 minutes (ClockSkew = 0 so expired = rejected).
+/// JwtBearerEvents adds "Token-Expired: true" header so clients know to use refresh token.
+///
+/// Key requirement: secret must be >= 32 UTF-8 bytes (256 bits) for HMAC-SHA256.
+/// </summary>
 public sealed class TokenService : ITokenService
 {
     private readonly IConfiguration _configuration;

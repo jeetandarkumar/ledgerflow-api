@@ -42,7 +42,7 @@ public static class AuthenticationExtensions
                     ValidateAudience = true,
                     ValidAudience    = jwtSettings["Audience"],
 
-                    // Expiry — no grace period; expired = rejected
+                    // Expiry â€” no grace period; expired = rejected
                     ValidateLifetime = true,
                     ClockSkew        = TimeSpan.Zero,
 

@@ -1,5 +1,4 @@
 using CleanArch.Application.Common.Models;
-using CleanArch.Domain.Exceptions;
 using CleanArch.Domain.Interfaces;
 using MediatR;
 
@@ -18,6 +17,8 @@ public sealed class GetUserQueryHandler : IRequestHandler<GetUserQuery, Result<U
     {
         var user = await _userRepository.GetByIdAsync(request.Id, cancellationToken);
 
+        // Tenant-scope check: if the user exists but belongs to a different tenant,
+        // return the same 404 response as "not found" — never leak cross-tenant existence.
         if (user is null || user.TenantId != request.TenantId)
             return Result<UserDto>.Failure($"User with ID '{request.Id}' was not found.");
 

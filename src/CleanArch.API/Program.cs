@@ -4,7 +4,6 @@ using CleanArch.Application.DependencyInjection;
 using CleanArch.Infrastructure.DependencyInjection;
 using Serilog;
 
-// Bootstrap logger for startup
 Log.Logger = new LoggerConfiguration()
     .WriteTo.Console()
     .CreateBootstrapLogger();
@@ -15,27 +14,30 @@ try
 
     var builder = WebApplication.CreateBuilder(args);
 
-    // Serilog - read from configuration
-    builder.Host.UseSerilog((context, services, config) => config
-        .ReadFrom.Configuration(context.Configuration)
-        .ReadFrom.Services(services)
+    // ── Serilog ───────────────────────────────────────────────────────────────
+    builder.Host.UseSerilog((ctx, svc, cfg) => cfg
+        .ReadFrom.Configuration(ctx.Configuration)
+        .ReadFrom.Services(svc)
         .Enrich.FromLogContext()
         .Enrich.WithEnvironmentName()
         .Enrich.WithThreadId());
 
-    // Controllers
+    // ── MVC + Swagger ─────────────────────────────────────────────────────────
     builder.Services.AddControllers();
     builder.Services.AddEndpointsApiExplorer();
+    builder.Services.AddSwaggerConfiguration();
 
-    // Application layers
+    // ── Application & Infrastructure ─────────────────────────────────────────
     builder.Services.AddApplicationServices();
     builder.Services.AddInfrastructureServices(builder.Configuration);
 
-    // API-specific services
-    builder.Services.AddSwaggerConfiguration();
+    // ── Auth: JWT bearer + authorization policies ────────────────────────────
     builder.Services.AddJwtAuthentication(builder.Configuration);
 
-    // CORS
+    // ── Rate limiting ─────────────────────────────────────────────────────────
+    builder.Services.AddRateLimiting();
+
+    // ── CORS ──────────────────────────────────────────────────────────────────
     builder.Services.AddCors(options =>
     {
         options.AddPolicy("DefaultPolicy", policy =>
@@ -52,26 +54,28 @@ try
         });
     });
 
-    // Health checks
     builder.Services.AddHealthChecks();
 
+    // ─────────────────────────────────────────────────────────────────────────
     var app = builder.Build();
 
-    // Middleware pipeline
+    // ── Middleware pipeline (order matters) ───────────────────────────────────
     app.UseMiddleware<GlobalExceptionHandlingMiddleware>();
 
-    app.UseSerilogRequestLogging(options =>
-    {
-        options.MessageTemplate =
-            "HTTP {RequestMethod} {RequestPath} responded {StatusCode} in {Elapsed:0.0000} ms";
-    });
+    app.UseSerilogRequestLogging(opts =>
+        opts.MessageTemplate = "HTTP {RequestMethod} {RequestPath} responded {StatusCode} in {Elapsed:0.0000} ms");
 
     if (app.Environment.IsDevelopment())
         app.UseSwaggerConfiguration();
 
     app.UseHttpsRedirection();
     app.UseCors("DefaultPolicy");
+
+    // Rate limiting before auth so rejected requests don't hit the DB
+    app.UseRateLimiter();
+
     app.UseAuthentication();
+    app.UseMiddleware<TenantResolutionMiddleware>();
     app.UseAuthorization();
 
     app.MapControllers();
@@ -88,5 +92,4 @@ finally
     Log.CloseAndFlush();
 }
 
-// Make Program accessible for integration testing
 public partial class Program { }

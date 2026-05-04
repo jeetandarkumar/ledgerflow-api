@@ -1,4 +1,4 @@
-# ledgerflow-api
+# CleanArch API
 
 A .NET 8 Web API scaffolded with Clean Architecture.
 

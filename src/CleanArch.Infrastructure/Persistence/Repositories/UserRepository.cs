@@ -6,7 +6,7 @@ namespace CleanArch.Infrastructure.Persistence.Repositories;
 
 /// <summary>
 /// EF Core repository for User entities.
-/// ALL queries include TenantId — email uniqueness is tenant-scoped,
+/// ALL queries include TenantId â€” email uniqueness is tenant-scoped,
 /// and returning users from the wrong tenant would be a data breach.
 /// </summary>
 public class UserRepository : BaseRepository<User>, IUserRepository
@@ -17,7 +17,7 @@ public class UserRepository : BaseRepository<User>, IUserRepository
     /// <remarks>
     /// Email lookup is always tenant-scoped. Two tenants can share an email address
     /// (e.g. a consultant who works with multiple companies on this platform).
-    /// Without the TenantId filter, the first match from any tenant would be returned — wrong.
+    /// Without the TenantId filter, the first match from any tenant would be returned â€” wrong.
     /// </remarks>
     public async Task<User?> GetByEmailAsync(
         Guid tenantId,

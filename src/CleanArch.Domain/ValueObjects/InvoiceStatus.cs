@@ -1,5 +1,25 @@
 namespace CleanArch.Domain.ValueObjects;
 
+/// <summary>
+/// Strongly-typed value object for invoice lifecycle status.
+///
+/// Why a value object rather than a plain enum?
+/// - The transition rules live here, not scattered across handlers.
+/// - Adding a new status means adding it here and updating AllowedTransitions,
+///   rather than hunting for switch/if chains across the codebase.
+///
+/// Valid invoice lifecycle:
+///
+///   Draft ──► Issued ──► PartiallyPaid ──► Paid
+///                │                          │
+///                └──────────────────────────┘
+///                         Overdue
+///                           │
+///                           ▼
+///                        Voided
+///                           │
+///              (also reachable from Draft and Issued)
+/// </summary>
 public sealed class InvoiceStatus : IEquatable<InvoiceStatus>
 {
     public string Value { get; }

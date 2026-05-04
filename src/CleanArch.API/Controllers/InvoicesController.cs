@@ -1,14 +1,20 @@
+using CleanArch.API.Authorization;
 using CleanArch.Application.Common.Interfaces;
 using CleanArch.Application.Features.Invoices.Commands.CreateInvoice;
+using CleanArch.Application.Features.Invoices.Commands.IssueInvoice;
+using CleanArch.Application.Features.Invoices.Commands.ProcessPayment;
+using CleanArch.Application.Features.Invoices.Commands.VoidInvoice;
 using CleanArch.Application.Features.Invoices.DTOs;
+using CleanArch.Application.Features.Invoices.Queries.GetInvoice;
+using CleanArch.Application.Features.Invoices.Queries.ListInvoices;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace CleanArch.API.Controllers;
 
 /// <summary>
-/// Invoice management endpoints.
-/// All routes require authentication — the JWT must carry a valid TenantId claim.
+/// Invoice lifecycle: create, issue, void, list, get, and record payments.
+/// All routes are tenant-scoped via the JWT.
 /// </summary>
 [Authorize]
 public class InvoicesController : BaseApiController
@@ -20,141 +26,205 @@ public class InvoicesController : BaseApiController
         _currentUser = currentUser;
     }
 
-    /// <summary>
-    /// Creates a new draft invoice for the authenticated tenant.
-    /// </summary>
-    /// <remarks>
-    /// The invoice is created in **Draft** status. It is not sent to the customer yet.
-    /// To send it, call `POST /api/v1/invoices/{id}/issue` after creation.
-    ///
-    /// **Invoice number** is generated automatically in the format `INV-{YYYY}-{NNNNNN}`
-    /// (e.g. `INV-2024-000042`). Numbers are sequential per tenant, per year.
-    ///
-    /// **Currency** defaults to the tenant's configured default currency if omitted.
-    ///
-    /// **Validation failures** return HTTP 422 with a structured error body showing
-    /// exactly which fields failed and why.
-    /// </remarks>
-    /// <param name="request">Invoice creation payload.</param>
-    /// <param name="cancellationToken">Request cancellation token.</param>
-    /// <returns>The fully resolved invoice including all computed financial figures.</returns>
-    /// <response code="201">Invoice created. Location header points to the new resource.</response>
-    /// <response code="400">Business rule violation (e.g. tenant is suspended).</response>
-    /// <response code="401">Missing or invalid JWT.</response>
-    /// <response code="422">Validation failed. Body contains field-level error details.</response>
+    /// <summary>Returns a paginated list of invoices for the authenticated tenant.</summary>
+    [HttpGet]
+    [ProducesResponseType(typeof(ListInvoicesResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status422UnprocessableEntity)]
+    public async Task<IActionResult> ListInvoices(
+        [FromQuery] string? status,
+        [FromQuery] int pageNumber = 1,
+        [FromQuery] int pageSize = 20,
+        CancellationToken cancellationToken = default)
+    {
+        var tenantId = _currentUser.TenantId;
+        if (tenantId is null) return Unauthorized();
+
+        var result = await Mediator.Send(
+            new ListInvoicesQuery(tenantId.Value, status, pageNumber, pageSize),
+            cancellationToken);
+
+        return result.Succeeded ? Ok(result.Data) : BadRequest(result.Errors);
+    }
+
+    /// <summary>Returns a single invoice by ID.</summary>
+    [HttpGet("{id:guid}")]
+    [ProducesResponseType(typeof(InvoiceResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetInvoice(Guid id, CancellationToken cancellationToken)
+    {
+        var tenantId = _currentUser.TenantId;
+        if (tenantId is null) return Unauthorized();
+
+        var result = await Mediator.Send(new GetInvoiceQuery(id, tenantId.Value), cancellationToken);
+
+        if (!result.Succeeded)
+            return NotFound(new ProblemDetails
+            {
+                Title = "Invoice not found",
+                Detail = result.Errors.FirstOrDefault(),
+                Status = StatusCodes.Status404NotFound
+            });
+
+        return Ok(result.Data);
+    }
+
+    /// <summary>Creates a new invoice in Draft status.</summary>
     [HttpPost]
+    [Authorize(Policy = AuthorizationPolicies.RequireMember)]
     [ProducesResponseType(typeof(InvoiceResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status422UnprocessableEntity)]
     public async Task<IActionResult> CreateInvoice(
         [FromBody] CreateInvoiceRequest request,
         CancellationToken cancellationToken)
     {
-        // Resolve tenant from the JWT. Every authenticated request carries a TenantId claim
-        // set during login. We don't accept TenantId from the request body — clients cannot
-        // self-select their own tenant context.
         var tenantId = _currentUser.TenantId;
-        if (tenantId is null)
-        {
-            return Unauthorized(new ProblemDetails
-            {
-                Title = "Missing tenant context",
-                Detail = "The authentication token does not contain a valid tenant identifier.",
-                Status = StatusCodes.Status401Unauthorized
-            });
-        }
+        if (tenantId is null) return Unauthorized();
 
-        // Map the HTTP request DTO to the MediatR command.
-        // This separation means the API contract (CreateInvoiceRequest) can evolve
-        // independently of the application command — useful for API versioning.
         var command = new CreateInvoiceCommand(
             TenantId: tenantId.Value,
             CustomerName: request.CustomerName,
             CustomerEmail: request.CustomerEmail,
-            Currency: ResolveCurrency(request),
+            Currency: ResolveCurrency(request.Currency),
             TaxRatePercentage: request.TaxRatePercentage,
             DiscountPercentage: request.DiscountPercentage,
             LineItems: request.LineItems.Select(li => new CreateInvoiceLineItemCommand(
-                Description: li.Description,
-                UnitPrice: li.UnitPrice,
-                Quantity: li.Quantity,
-                DiscountPercentage: li.DiscountPercentage,
-                ProductReference: li.ProductReference
+                li.Description, li.UnitPrice, li.Quantity, li.DiscountPercentage, li.ProductReference
             )).ToList(),
             Notes: request.Notes,
             BillingAddress: request.BillingAddress is { } addr
-                ? new CreateInvoiceBillingAddressCommand(
-                    Line1: addr.Line1,
-                    Line2: addr.Line2,
-                    City: addr.City,
-                    State: addr.State,
-                    CountryCode: addr.CountryCode,
-                    PostalCode: addr.PostalCode)
-                : null
-        );
+                ? new CreateInvoiceBillingAddressCommand(addr.Line1, addr.Line2, addr.City,
+                    addr.State, addr.CountryCode, addr.PostalCode)
+                : null);
 
         var result = await Mediator.Send(command, cancellationToken);
 
         if (!result.Succeeded)
-        {
-            // Handler returned a business-level failure (not an exception).
-            // These are soft errors the caller can act on.
             return BadRequest(new ProblemDetails
             {
                 Title = "Invoice creation failed",
                 Detail = string.Join("; ", result.Errors),
                 Status = StatusCodes.Status400BadRequest
             });
-        }
 
-        // 201 Created with a Location header pointing to the new resource.
-        // Clients should follow the Location URL to retrieve the full invoice.
-        return CreatedAtAction(
-            actionName: nameof(GetInvoice),
-            routeValues: new { id = result.Data!.Id },
-            value: result.Data);
+        return CreatedAtAction(nameof(GetInvoice), new { id = result.Data!.Id }, result.Data);
     }
 
-    /// <summary>
-    /// Gets a specific invoice by ID.
-    /// </summary>
-    /// <param name="id">Invoice GUID.</param>
-    /// <param name="cancellationToken">Request cancellation token.</param>
-    /// <response code="200">Invoice found and returned.</response>
-    /// <response code="404">Invoice not found or does not belong to the current tenant.</response>
-    [HttpGet("{id:guid}")]
+    /// <summary>Issues a Draft invoice, making it payable by the customer.</summary>
+    [HttpPost("{id:guid}/issue")]
+    [Authorize(Policy = AuthorizationPolicies.RequireMember)]
     [ProducesResponseType(typeof(InvoiceResponse), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> GetInvoice(Guid id, CancellationToken cancellationToken)
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status422UnprocessableEntity)]
+    public async Task<IActionResult> IssueInvoice(
+        Guid id,
+        [FromBody] IssueInvoiceRequest request,
+        CancellationToken cancellationToken)
     {
-        // Placeholder — implement GetInvoiceQuery in the next slice.
-        // Stubbed here so CreatedAtAction in CreateInvoice has a valid action to reference.
-        return await Task.FromResult<IActionResult>(NotFound(new ProblemDetails
-        {
-            Title = "Not implemented",
-            Detail = "GetInvoice query is not yet implemented.",
-            Status = StatusCodes.Status404NotFound
-        }));
+        var tenantId = _currentUser.TenantId;
+        var userId = _currentUser.UserId;
+        if (tenantId is null || userId is null) return Unauthorized();
+
+        var command = new IssueInvoiceCommand(
+            InvoiceId: id,
+            TenantId: tenantId.Value,
+            IssuedByUserId: userId.Value,
+            IssuedByUserName: _currentUser.UserName ?? "Unknown",
+            DueDate: request.DueDate,
+            BillingAddress: request.BillingAddress is { } addr
+                ? new IssueInvoiceBillingAddressCommand(addr.Line1, addr.Line2, addr.City,
+                    addr.State, addr.CountryCode, addr.PostalCode)
+                : null);
+
+        var result = await Mediator.Send(command, cancellationToken);
+
+        return result.Succeeded
+            ? Ok(result.Data)
+            : BadRequest(new ProblemDetails
+            {
+                Title = "Failed to issue invoice",
+                Detail = string.Join("; ", result.Errors),
+                Status = StatusCodes.Status400BadRequest
+            });
     }
 
-    // ── Private helpers ───────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Resolves the invoice currency.
-    /// If the request omits Currency, we fall back to the tenant's default currency
-    /// (pulled from the JWT claim set at login time).
-    /// If neither is available, we default to USD — the handler will validate this
-    /// against the tenant's actual settings and throw if it's wrong.
-    /// </summary>
-    private string ResolveCurrency(CreateInvoiceRequest request)
+    /// <summary>Voids an invoice permanently. Requires Admin role.</summary>
+    [HttpPost("{id:guid}/void")]
+    [Authorize(Policy = AuthorizationPolicies.RequireAdmin)]
+    [ProducesResponseType(typeof(InvoiceResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<IActionResult> VoidInvoice(
+        Guid id,
+        [FromBody] VoidInvoiceRequest request,
+        CancellationToken cancellationToken)
     {
-        if (!string.IsNullOrWhiteSpace(request.Currency))
-            return request.Currency;
+        var tenantId = _currentUser.TenantId;
+        var userId = _currentUser.UserId;
+        if (tenantId is null || userId is null) return Unauthorized();
 
-        if (!string.IsNullOrWhiteSpace(_currentUser.DefaultCurrency))
-            return _currentUser.DefaultCurrency;
+        var command = new VoidInvoiceCommand(
+            InvoiceId: id,
+            TenantId: tenantId.Value,
+            VoidedByUserId: userId.Value,
+            VoidedByUserName: _currentUser.UserName ?? "Unknown",
+            Reason: request.Reason);
 
+        var result = await Mediator.Send(command, cancellationToken);
+
+        return result.Succeeded
+            ? Ok(result.Data)
+            : BadRequest(new ProblemDetails
+            {
+                Title = "Failed to void invoice",
+                Detail = string.Join("; ", result.Errors),
+                Status = StatusCodes.Status400BadRequest
+            });
+    }
+
+    /// <summary>Records a confirmed payment or refund against an invoice.</summary>
+    [HttpPost("{id:guid}/payments")]
+    [Authorize(Policy = AuthorizationPolicies.RequireMember)]
+    [ProducesResponseType(typeof(PaymentResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status422UnprocessableEntity)]
+    public async Task<IActionResult> ProcessPayment(
+        Guid id,
+        [FromBody] ProcessPaymentRequest request,
+        CancellationToken cancellationToken)
+    {
+        var tenantId = _currentUser.TenantId;
+        if (tenantId is null) return Unauthorized();
+
+        var command = new ProcessPaymentCommand(
+            TenantId: tenantId.Value,
+            InvoiceId: id,
+            Amount: request.Amount,
+            Currency: request.Currency,
+            PaymentMethod: request.PaymentMethod,
+            PaymentType: request.Type,
+            ExternalReference: request.ExternalReference,
+            RefundedPaymentId: request.RefundedPaymentId,
+            InitiatedByUserId: _currentUser.UserId,
+            InitiatedByUserName: _currentUser.UserName,
+            Notes: request.Notes);
+
+        var result = await Mediator.Send(command, cancellationToken);
+
+        return result.Succeeded
+            ? Ok(result.Data)
+            : BadRequest(new ProblemDetails
+            {
+                Title = "Payment processing failed",
+                Detail = string.Join("; ", result.Errors),
+                Status = StatusCodes.Status400BadRequest
+            });
+    }
+
+    private string ResolveCurrency(string? requested)
+    {
+        if (!string.IsNullOrWhiteSpace(requested)) return requested;
+        if (!string.IsNullOrWhiteSpace(_currentUser.DefaultCurrency)) return _currentUser.DefaultCurrency!;
         return "USD";
     }
 }

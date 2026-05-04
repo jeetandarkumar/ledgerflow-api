@@ -1,0 +1,48 @@
+name: CI-CD Pipeline
+
+on:
+  push:
+    branches:
+      - dev
+      - uat
+      - main
+
+jobs:
+
+  build-test:
+    runs-on: self-hosted
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore
+
+      - name: Run Unit Tests
+        run: dotnet test tests/UnitTests
+
+      - name: Run Integration Tests
+        run: dotnet test tests/IntegrationTests
+        
+  deploy:
+    needs: build-test
+    if: github.ref == 'refs/heads/main'
+    runs-on: self-hosted
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Publish
+        run: dotnet publish WebAPI/WebAPI.csproj -c Release -o publish
+
+      - name: Deploy to IIS
+        run: |
+          xcopy /y /s publish\* "C:\inetpub\wwwroot\MyApi\"
