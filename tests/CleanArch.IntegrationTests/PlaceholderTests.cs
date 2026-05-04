@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace CleanArch.IntegrationTests;
+namespace ledgerflowApi.IntegrationTests;
 
 // Placeholder — add integration tests that spin up WebApplicationFactory here.
 public class PlaceholderTests

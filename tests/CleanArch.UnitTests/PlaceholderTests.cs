@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace CleanArch.UnitTests;
+namespace ledgerflowApi.UnitTests;
 
 // Placeholder — add real unit tests here as you implement business logic.
 public class PlaceholderTests
