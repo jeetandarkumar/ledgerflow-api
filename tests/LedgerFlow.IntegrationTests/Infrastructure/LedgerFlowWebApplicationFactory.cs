@@ -40,7 +40,13 @@ public class LedgerFlowWebApplicationFactory : WebApplicationFactory<Program>
             services.RemoveAll<ApplicationDbContext>();
 
             services.AddDbContext<ApplicationDbContext>(options =>
-                options.UseInMemoryDatabase(_dbName));
+                options
+                    .UseInMemoryDatabase(_dbName)
+                    // The in-memory provider does not support transactions.
+                    // UnitOfWork calls BeginTransactionAsync, which the provider
+                    // ignores — suppress the warning so tests don't throw.
+                    .ConfigureWarnings(w =>
+                        w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.InMemoryEventId.TransactionIgnoredWarning)));
 
             // ── Replace Redis with a no-op cache ──────────────────────────
             services.RemoveAll<ledgerflowApi.Application.Common.Interfaces.ICacheService>();
@@ -53,11 +59,11 @@ public class LedgerFlowWebApplicationFactory : WebApplicationFactory<Program>
         {
             config.AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["JwtSettings:SecretKey"] = "integration-test-secret-key-minimum-32-bytes!!",
+                ["JwtSettings:SecretKey"] = "Q9v!s2Kx#pL8@zW1nR6tY4uI0oP7mA5cB3dE8fG",
                 ["JwtSettings:Issuer"] = "ledgerflow-test",
                 ["JwtSettings:Audience"] = "ledgerflow-api-test",
                 ["JwtSettings:ExpirationMinutes"] = "60",
-                ["ConnectionStrings:DefaultConnection"] = "not-used-in-tests"
+                ["ConnectionStrings:DefaultConnection"] = "Server=DESKTOP-72ACC7O;Database=ledgerflowApiDb;Trusted_Connection=True;TrustServerCertificate=True;"
             });
         });
     }
@@ -120,13 +126,13 @@ public abstract class IntegrationTestBase : IAsyncLifetime
 
     protected async Task<string> GetAuthTokenAsync(string email, string password, Guid tenantId)
     {
-        var response = await Client.PostAsJsonAsync("/api/auth/login", new
+        var request = new HttpRequestMessage(HttpMethod.Post, "/api/v1/auth/login")
         {
-            tenantId,
-            email,
-            password
-        });
+            Content = JsonContent.Create(new { email, password })
+        };
+        request.Headers.Add("X-Tenant-Id", tenantId.ToString());
 
+        var response = await Client.SendAsync(request);
         response.EnsureSuccessStatusCode();
         var body = await response.Content.ReadFromJsonAsync<AuthTokenResponse>();
         return body?.AccessToken ?? throw new InvalidOperationException("No access token in response");

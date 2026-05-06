@@ -50,7 +50,7 @@ public class ValidatorTests
         [Fact]
         public void Validate_EmailOver256Chars_FailsValidation()
         {
-            var longEmail = new string('a', 250) + "@x.com"; // >256 chars
+            var longEmail = new string('a', 251) + "@x.com"; // >256 chars
             var command = new LoginCommand(Guid.NewGuid(), longEmail, "Password123!");
             _validator.TestValidate(command).ShouldHaveValidationErrorFor(x => x.Email);
         }
@@ -189,9 +189,10 @@ public class ValidatorTests
         public void Validate_ZeroAmount_FailsValidation()
         {
             var command = MakeValid() with { Amount = 0m };
+
             _validator.TestValidate(command)
                 .ShouldHaveValidationErrorFor(x => x.Amount)
-                .WithErrorMessage("*greater than zero*");
+                .WithErrorMessage("Payment amount must be greater than zero.");
         }
 
         [Fact]

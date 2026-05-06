@@ -134,8 +134,8 @@ public sealed class CreateInvoiceLineItemCommandValidator : AbstractValidator<Cr
             .WithMessage("Line item description cannot exceed 500 characters.");
 
         RuleFor(x => x.UnitPrice)
-            .GreaterThanOrEqualTo(0m)
-            .WithMessage("Unit price cannot be negative.")
+            .GreaterThan(0m)
+            .WithMessage("Unit price must be greater than zero.")
             // 10 million per unit seems like a reasonable upper bound for a SaaS billing line.
             // Prevents fat-finger amounts that would corrupt financial reports.
             .LessThanOrEqualTo(10_000_000m)

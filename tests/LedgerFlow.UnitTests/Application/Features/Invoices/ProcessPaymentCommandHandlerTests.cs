@@ -246,19 +246,21 @@ public class ProcessPaymentCommandHandlerTests
         var invoice = CreateIssuedInvoice(amount: 200m);
         var originalPayment = Payment.Create(TenantId, invoice.Id,
             Money.Of(200m, "USD"), "card", "Standard", "pi_original_001");
+        originalPayment.Complete("pi_original_001");
         invoice.RecordPayment(Money.Of(200m, "USD"), TenantId);
 
         _invoiceRepo.Setup(r => r.GetByIdAsync(invoice.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(invoice);
         _paymentRepo.Setup(r => r.GetByExternalReferenceAsync(
-                It.IsAny<string>(), It.IsAny<CancellationToken>()));
+                 It.IsAny<string>(), It.IsAny<CancellationToken>()))
+             .ReturnsAsync((Payment)null);
         _paymentRepo.Setup(r => r.GetByIdAsync(originalPayment.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(originalPayment);
         _currentUser.Setup(u => u.UserId).Returns(UserId);
         _currentUser.Setup(u => u.TenantId).Returns(TenantId);
         _unitOfWork.Setup(u => u.ExecuteInTransactionAsync(
-                It.IsAny<Func<Task>>(), It.IsAny<CancellationToken>()))
-            .Callback<Func<Task>, CancellationToken>((fn, _) => fn().GetAwaiter().GetResult());
+        It.IsAny<Func<Task>>(), It.IsAny<CancellationToken>()))
+    .Returns<Func<Task>, CancellationToken>((func, _) => func());
 
         var handler = CreateHandler();
 
@@ -270,6 +272,7 @@ public class ProcessPaymentCommandHandlerTests
 
         // Assert
         result.Succeeded.Should().BeTrue();
+        result.Data.Should().NotBeNull();
         result.Data!.Invoice.Status.Should().Be("Issued"); // back to Issued after full refund
         result.Data.Invoice.PaidAmount.Should().Be(0m);
     }

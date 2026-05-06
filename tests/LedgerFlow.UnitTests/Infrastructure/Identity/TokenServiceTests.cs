@@ -155,10 +155,15 @@ public class TokenServiceTests
     }
 
     [Fact]
-    public void ValidateToken_EmptyString_ReturnsNull()
+    public void ValidateToken_EmptyString_ThrowsArgumentNullException()
     {
         var service = CreateService();
-        service.ValidateToken("").Should().BeNull();
+
+        var act = () => service.ValidateToken("");
+
+        act.Should()
+            .Throw<ArgumentNullException>()
+            .WithMessage("*token*");
     }
 
     // ── Configuration validation ──────────────────────────────────────────────
