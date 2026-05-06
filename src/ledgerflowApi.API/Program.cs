@@ -68,7 +68,7 @@ try
     if (app.Environment.IsDevelopment())
         app.UseSwaggerConfiguration();
 
-    app.UseHttpsRedirection();
+    //app.UseHttpsRedirection();
     app.UseCors("DefaultPolicy");
 
     // Rate limiting before auth so rejected requests don't hit the DB

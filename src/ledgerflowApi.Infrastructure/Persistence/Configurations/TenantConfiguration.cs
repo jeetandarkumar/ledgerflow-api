@@ -57,5 +57,6 @@ public class TenantConfiguration : IEntityTypeConfiguration<Tenant>
 
         builder.HasIndex(t => t.Status)
             .HasDatabaseName("IX_Tenants_Status");
+        builder.ToTable("Tenants", tb => tb.HasTrigger("trg_Tenants_AfterUpdate"));
     }
 }

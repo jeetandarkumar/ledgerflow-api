@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Coverlet code coverage settings.
+  Place this file at: tests/coverlet.runsettings
+  Reference it with: dotnet test --settings tests/coverlet.runsettings
+
+  This configuration:
+  - Excludes test projects themselves from coverage numbers
+  - Excludes generated EF Core migration files
+  - Excludes Program.cs (startup wiring — not meaningful to test directly)
+  - Produces Cobertura XML output (compatible with GitHub Actions reporters)
+  - Sets a minimum threshold so a coverage drop fails the build
+-->
+<RunSettings>
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <DataCollector friendlyName="XPlat Code Coverage">
+        <Configuration>
+
+          <!-- Output format — Cobertura works with dorny/test-reporter and most CI tools -->
+          <Format>cobertura</Format>
+
+          <!-- Exclude test assemblies from the coverage numbers -->
+          <Exclude>[LedgerFlow.UnitTests]*,[LedgerFlow.IntegrationTests]*</Exclude>
+
+          <!-- Exclude generated/infrastructure code that isn't meaningful to cover -->
+          <ExcludeByFile>
+            **/Migrations/**,
+            **/Program.cs,
+            **/obj/**
+          </ExcludeByFile>
+
+          <!-- Exclude attributes like [ExcludeFromCodeCoverage] -->
+          <ExcludeByAttribute>
+            GeneratedCodeAttribute,
+            CompilerGeneratedAttribute,
+            ExcludeFromCodeCoverageAttribute
+          </ExcludeByAttribute>
+
+          <!-- Include all application source projects -->
+          <Include>
+            [ledgerflowApi.Domain]*,
+            [ledgerflowApi.Application]*,
+            [ledgerflowApi.Infrastructure]*,
+            [ledgerflowApi.API]*
+          </Include>
+
+          <!-- Fail the build if line coverage drops below 70% -->
+          <!-- Raise this threshold incrementally as you add more tests -->
+          <Threshold>70</Threshold>
+          <ThresholdType>line</ThresholdType>
+          <ThresholdStat>Total</ThresholdStat>
+
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+</RunSettings>

@@ -59,5 +59,6 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
 
         builder.HasIndex(u => new { u.TenantId, u.IsActive })
             .HasDatabaseName("IX_Users_TenantId_IsActive");
+        builder.ToTable("Users", tb => tb.HasTrigger("trg_Users_AfterUpdate"));
     }
 }

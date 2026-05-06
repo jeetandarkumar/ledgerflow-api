@@ -1,48 +1,382 @@
-name: CI-CD Pipeline
+##############################################################################
+# LedgerFlow API — GitHub Actions CI/CD Pipeline
+#
+# Branching strategy:
+#   Dev   → auto-build, test, deploy to Dev folder
+#   UAT   → auto-build, test, deploy to UAT folder (only when tests pass)
+#   main  → auto-build, test, deploy to Production (only after UAT merge)
+#
+# Runner: self-hosted (your Windows box at D:\Projects\...)
+#   The runner must have:
+#     - .NET 8 SDK installed
+#     - Access to D:\Projects\ deploy folders
+#     - The IIS site / Windows service already created at each path
+#
+# Secrets required (set these in GitHub → Settings → Secrets → Actions):
+#   IIS_SITE_NAME_DEV    — IIS site name for Dev (e.g. "ledgerflowApi-Dev")
+#   IIS_SITE_NAME_UAT    — IIS site name for UAT (e.g. "ledgerflowApi-UAT")
+#   IIS_SITE_NAME_PROD   — IIS site name for Prod (e.g. "ledgerflowApi")
+#   TEAMS_WEBHOOK_URL    — Microsoft Teams incoming webhook for failure alerts
+#                          (optional — remove the notify-failure step if unused)
+##############################################################################
+
+name: LedgerFlow CI/CD
 
 on:
   push:
     branches:
-      - dev
-      - uat
+      - Dev
+      - UAT
       - main
 
+  pull_request:
+    branches:
+      - UAT
+      - main
+
+# Cancel any in-progress run for the same branch when a new push arrives.
+# This prevents a slow Dev run from blocking a newer commit on the same branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+##############################################################################
+# SHARED BUILD & TEST JOB
+# Runs on every push to Dev, UAT, and main.
+# If this fails, no deployment happens at all.
+##############################################################################
 jobs:
-
-  build-test:
+  build-and-test:
+    name: Build & Test
     runs-on: self-hosted
 
     steps:
-      - uses: actions/checkout@v3
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v3
+      # ── Checkout ─────────────────────────────────────────────────────────────
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
-          dotnet-version: '8.0.x'
+          fetch-depth: 0  # full history needed for accurate coverage diffs
 
-      - name: Restore
-        run: dotnet restore
+      # ── .NET setup ────────────────────────────────────────────────────────────
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
 
-      - name: Build
-        run: dotnet build --no-restore
+      # ── Restore ───────────────────────────────────────────────────────────────
+      - name: Restore NuGet packages
+        run: dotnet restore ledgerflowApi.sln
 
-      - name: Run Unit Tests
-        run: dotnet test tests/UnitTests
+      # ── Build ─────────────────────────────────────────────────────────────────
+      - name: Build solution (Release)
+        run: |
+          dotnet build ledgerflowApi.sln \
+            --configuration Release \
+            --no-restore \
+            --verbosity minimal
 
-      - name: Run Integration Tests
-        run: dotnet test tests/IntegrationTests
-        
-  deploy:
-    needs: build-test
-    if: github.ref == 'refs/heads/main'
+      # ── Unit tests ────────────────────────────────────────────────────────────
+      # Run first — they're fast (~5 seconds) and catch most logic bugs.
+      # --no-build reuses the already-built output from the step above.
+      - name: Run unit tests
+        run: |
+          dotnet test tests/LedgerFlow.UnitTests/LedgerFlow.UnitTests.csproj \
+            --configuration Release \
+            --no-build \
+            --verbosity normal \
+            --logger "trx;LogFileName=unit-test-results.trx" \
+            --results-directory ./test-results \
+            --collect:"XPlat Code Coverage" \
+            --settings tests/coverlet.runsettings
+
+      # ── Integration tests ──────────────────────────────────────────────────────
+      # Run after unit tests. They're slower (~30–60 seconds) because they boot
+      # the ASP.NET pipeline. They use an in-memory database — no real SQL needed.
+      - name: Run integration tests
+        run: |
+          dotnet test tests/LedgerFlow.IntegrationTests/LedgerFlow.IntegrationTests.csproj \
+            --configuration Release \
+            --no-build \
+            --verbosity normal \
+            --logger "trx;LogFileName=integration-test-results.trx" \
+            --results-directory ./test-results \
+            --collect:"XPlat Code Coverage" \
+            --settings tests/coverlet.runsettings
+        env:
+          # Pass environment-specific config into integration tests via env vars.
+          # The test WebApplicationFactory overrides these in-memory, but having
+          # them here lets you run the tests locally without appsettings edits.
+          ASPNETCORE_ENVIRONMENT: Testing
+
+      # ── Publish test results ───────────────────────────────────────────────────
+      # Uses the dorny/test-reporter action to show test results directly in the
+      # GitHub Actions UI (pass/fail counts, individual test names, durations).
+      - name: Publish test results
+        uses: dorny/test-reporter@v1
+        if: always()  # run even if tests failed — we still want to see what failed
+        with:
+          name: Test Results
+          path: "test-results/*.trx"
+          reporter: dotnet-trx
+          fail-on-error: true
+
+      # ── Upload coverage report ─────────────────────────────────────────────────
+      - name: Upload code coverage
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report-${{ github.run_number }}
+          path: test-results/**/coverage.cobertura.xml
+          retention-days: 14
+
+      # ── Notify on failure ──────────────────────────────────────────────────────
+      - name: Notify team on build/test failure
+        if: failure()
+        run: |
+          $body = @{
+            text = "❌ *Build/Test failed* on branch ``${{ github.ref_name }}``\n" +
+                   "Commit: ${{ github.sha }}\nBy: ${{ github.actor }}\n" +
+                   "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } | ConvertTo-Json
+          Invoke-RestMethod -Uri "${{ secrets.TEAMS_WEBHOOK_URL }}" -Method Post `
+            -ContentType "application/json" -Body $body
+        shell: pwsh
+
+##############################################################################
+# DEV DEPLOYMENT
+# Triggers: push to Dev branch only, after tests pass.
+# Profile: DEV.pubxml → D:\Projects\ledgerflowApi
+# This is the same path as the existing FolderProfile2.pubxml.
+##############################################################################
+  deploy-dev:
+    name: Deploy to Dev
+    needs: build-and-test
+    if: github.ref == 'refs/heads/Dev' && github.event_name == 'push'
     runs-on: self-hosted
 
+    environment:
+      name: Development
+      url: http://localhost:5000  # adjust to your Dev IIS binding
+
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Publish
-        run: dotnet publish WebAPI/WebAPI.csproj -c Release -o publish
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
 
-      - name: Deploy to IIS
+      - name: Publish to Dev folder
         run: |
-          xcopy /y /s publish\* "C:\inetpub\wwwroot\MyApi\"
+          dotnet publish src/ledgerflowApi.API/ledgerflowApi.API.csproj `
+            --configuration Release `
+            /p:PublishProfile=DEV `
+            --verbosity minimal
+        shell: pwsh
+        # Note: The publish profile path is resolved from the project's
+        # Properties/PublishProfiles/ folder. Copy DEV.pubxml there.
+
+      - name: Restart IIS site (Dev)
+        run: |
+          Import-Module WebAdministration -ErrorAction Stop
+          $siteName = "${{ secrets.IIS_SITE_NAME_DEV }}"
+          Stop-WebSite -Name $siteName -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+          Start-WebSite -Name $siteName
+          Write-Host "IIS site '$siteName' restarted successfully."
+        shell: pwsh
+
+      - name: Smoke test — health endpoint
+        run: |
+          $maxRetries = 5
+          $delay = 3
+          for ($i = 1; $i -le $maxRetries; $i++) {
+            try {
+              $response = Invoke-WebRequest -Uri "http://localhost:5000/health" -UseBasicParsing
+              if ($response.StatusCode -eq 200) {
+                Write-Host "Health check passed on attempt $i"
+                exit 0
+              }
+            } catch {
+              Write-Host "Attempt $i failed: $_"
+            }
+            Start-Sleep -Seconds $delay
+          }
+          Write-Error "Health check failed after $maxRetries attempts"
+          exit 1
+        shell: pwsh
+
+      - name: Notify on deploy failure
+        if: failure()
+        run: |
+          $body = @{
+            text = "❌ *DEV deployment failed*\nBranch: Dev | Run: ${{ github.run_id }}"
+          } | ConvertTo-Json
+          Invoke-RestMethod -Uri "${{ secrets.TEAMS_WEBHOOK_URL }}" -Method Post `
+            -ContentType "application/json" -Body $body
+        shell: pwsh
+
+##############################################################################
+# UAT DEPLOYMENT
+# Triggers: push to UAT branch (i.e. QA merged Dev → UAT), after tests pass.
+# Profile: UAT.pubxml → D:\Projects\ledgerflowApi-UAT
+# QA performs manual testing against this environment before approving main.
+##############################################################################
+  deploy-uat:
+    name: Deploy to UAT
+    needs: build-and-test
+    if: github.ref == 'refs/heads/UAT' && github.event_name == 'push'
+    runs-on: self-hosted
+
+    # The "UAT" GitHub environment requires a manual approval rule.
+    # Configure this in: Settings → Environments → UAT → Required reviewers.
+    # This gives QA the option to block deployment if they're in the middle of testing.
+    environment:
+      name: UAT
+      url: http://localhost:5001  # adjust to your UAT IIS binding
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Publish to UAT folder
+        run: |
+          dotnet publish src/ledgerflowApi.API/ledgerflowApi.API.csproj `
+            --configuration Release `
+            /p:PublishProfile=UAT `
+            --verbosity minimal
+        shell: pwsh
+
+      - name: Restart IIS site (UAT)
+        run: |
+          Import-Module WebAdministration
+          $siteName = "${{ secrets.IIS_SITE_NAME_UAT }}"
+          Stop-WebSite -Name $siteName -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+          Start-WebSite -Name $siteName
+          Write-Host "UAT IIS site restarted."
+        shell: pwsh
+
+      - name: Smoke test — health endpoint
+        run: |
+          $maxRetries = 5
+          for ($i = 1; $i -le $maxRetries; $i++) {
+            try {
+              $r = Invoke-WebRequest -Uri "http://localhost:5001/health" -UseBasicParsing
+              if ($r.StatusCode -eq 200) { Write-Host "UAT health check OK"; exit 0 }
+            } catch { Write-Host "Attempt $i failed: $_" }
+            Start-Sleep -Seconds 3
+          }
+          exit 1
+        shell: pwsh
+
+      - name: Notify QA — UAT deployment ready
+        if: success()
+        run: |
+          $body = @{
+            text = "✅ *UAT deployment complete*\nBuild: ${{ github.run_number }} | " +
+                   "Branch: UAT\nQA can start manual testing at http://your-uat-url"
+          } | ConvertTo-Json
+          Invoke-RestMethod -Uri "${{ secrets.TEAMS_WEBHOOK_URL }}" -Method Post `
+            -ContentType "application/json" -Body $body
+        shell: pwsh
+
+      - name: Notify on deploy failure
+        if: failure()
+        run: |
+          $body = @{
+            text = "❌ *UAT deployment failed*\nRun: ${{ github.run_id }}"
+          } | ConvertTo-Json
+          Invoke-RestMethod -Uri "${{ secrets.TEAMS_WEBHOOK_URL }}" -Method Post `
+            -ContentType "application/json" -Body $body
+        shell: pwsh
+
+##############################################################################
+# PRODUCTION DEPLOYMENT
+# Triggers: push to main (i.e. QA approved and merged UAT → main).
+# Profile: PROD.pubxml → D:\Projects\ledgerflowApi-PROD
+#
+# This job has a required manual approval gate in the GitHub "Production"
+# environment. Even after QA merges to main, a human must click Approve
+# in the GitHub Actions UI before this job runs.
+# Set this up: Settings → Environments → Production → Required reviewers.
+##############################################################################
+  deploy-prod:
+    name: Deploy to Production
+    needs: build-and-test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: self-hosted
+
+    environment:
+      name: Production
+      url: http://localhost:5002  # adjust to your Prod IIS binding
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Publish to Production folder
+        run: |
+          dotnet publish src/ledgerflowApi.API/ledgerflowApi.API.csproj `
+            --configuration Release `
+            /p:PublishProfile=PROD `
+            --verbosity minimal
+        shell: pwsh
+
+      - name: Restart IIS site (Production)
+        run: |
+          Import-Module WebAdministration
+          $siteName = "${{ secrets.IIS_SITE_NAME_PROD }}"
+          Stop-WebSite -Name $siteName -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 3
+          Start-WebSite -Name $siteName
+          Write-Host "Production IIS site restarted."
+        shell: pwsh
+
+      - name: Smoke test — health endpoint
+        run: |
+          $maxRetries = 8
+          for ($i = 1; $i -le $maxRetries; $i++) {
+            try {
+              $r = Invoke-WebRequest -Uri "http://localhost:5002/health" -UseBasicParsing
+              if ($r.StatusCode -eq 200) { Write-Host "Production health check OK"; exit 0 }
+            } catch { Write-Host "Attempt $i failed: $_" }
+            Start-Sleep -Seconds 5
+          }
+          exit 1
+        shell: pwsh
+
+      - name: Notify team — Production deployment succeeded
+        if: success()
+        run: |
+          $body = @{
+            text = "🚀 *Production deployment succeeded*\n" +
+                   "Build: ${{ github.run_number }} | Commit: ${{ github.sha }}\n" +
+                   "Deployed by: ${{ github.actor }}"
+          } | ConvertTo-Json
+          Invoke-RestMethod -Uri "${{ secrets.TEAMS_WEBHOOK_URL }}" -Method Post `
+            -ContentType "application/json" -Body $body
+        shell: pwsh
+
+      - name: Notify team — Production deployment FAILED
+        if: failure()
+        run: |
+          $body = @{
+            text = "🔴 *PRODUCTION DEPLOYMENT FAILED*\n" +
+                   "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\n" +
+                   "Manual rollback may be required!"
+          } | ConvertTo-Json
+          Invoke-RestMethod -Uri "${{ secrets.TEAMS_WEBHOOK_URL }}" -Method Post `
+            -ContentType "application/json" -Body $body
+        shell: pwsh
