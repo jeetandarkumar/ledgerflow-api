@@ -129,7 +129,7 @@ jobs:
 
       # ── Notify on failure ──────────────────────────────────────────────────────
       - name: Notify team on build/test failure
-        if: failure()
+        if: failure() && secrets.TEAMS_WEBHOOK_URL != ''
         run: |
           $body = @{
             text = "❌ *Build/Test failed* on branch ``${{ github.ref_name }}``\n" +
