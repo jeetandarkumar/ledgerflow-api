@@ -44,7 +44,7 @@ jobs:
         shell: powershell
 
       - name: Publish Unit Test Results
-        uses: dorny/test-reporter@v2
+        uses: dorny/test-reporter@v1
         if: always()
         with:
           name: Unit Tests
@@ -89,7 +89,7 @@ jobs:
         shell: powershell
 
       - name: Publish Integration Results
-        uses: dorny/test-reporter@v2
+        uses: dorny/test-reporter@v1
         if: always()
         with:
           name: Integration Tests
