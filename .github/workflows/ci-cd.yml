@@ -2,7 +2,17 @@ name: LedgerFlow CI/CD
 
 on:
   push:
-    branches: [Dev, UAT, main]
+    branches: [Dev]
+
+  workflow_dispatch:
+    inputs:
+      deploy_env:
+        description: "Select deployment target"
+        required: true
+        type: choice
+        options:
+          - UAT
+          - PROD
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -13,14 +23,16 @@ permissions:
   checks: write
   actions: read
 
+##############################################################################
+# 🔵 STEP 1 — DEV (Auto on Dev push)
+##############################################################################
 jobs:
-
-##############################################################################
-# STEP 1 — BUILD + UNIT TESTS + DEV DEPLOY
-##############################################################################
-  dev-stage:
-    name: Step 1 - Build, Unit Tests, Deploy DEV
+  dev:
+    name: DEV - Unit Tests + Deploy
     runs-on: self-hosted
+    if: github.ref == 'refs/heads/Dev'
+
+    environment: DEV
 
     steps:
       - uses: actions/checkout@v4
@@ -29,25 +41,18 @@ jobs:
         run: dotnet restore ledgerflowApi.sln
 
       - name: Build
-        run: |
-          dotnet build ledgerflowApi.sln `
-            --configuration Release `
-            --no-restore
-        shell: powershell
+        run: dotnet build ledgerflowApi.sln -c Release
 
-      # ---------------- UNIT TESTS ONLY ----------------
       - name: Run Unit Tests
         run: |
           dotnet test tests/LedgerFlow.UnitTests/LedgerFlow.UnitTests.csproj `
-            --configuration Release `
-            --no-build `
+            -c Release `
             --logger "trx;LogFileName=unit.trx" `
             --results-directory ./test-results `
             --collect:"XPlat Code Coverage" `
             --settings tests/coverlet.runsettings
         shell: powershell
 
-      # ---------------- TEST REPORT ----------------
       - name: Publish Unit Test Results
         uses: dorny/test-reporter@v1
         if: always()
@@ -56,35 +61,39 @@ jobs:
           path: "test-results/*.trx"
           reporter: dotnet-trx
 
-      # ---------------- DEV DEPLOY ----------------
       - name: Deploy DEV
-        if: github.ref == 'refs/heads/Dev'
-        shell: powershell
         run: |
           dotnet publish src/ledgerflowApi.API/ledgerflowApi.API.csproj `
             -c Release `
             -r win-x64 `
             --self-contained false `
             -o "D:\Projects\ledgerflowApi\DEV"
+        shell: powershell
 
 
 ##############################################################################
-# STEP 2 — INTEGRATION TESTS + UAT DEPLOY
+# 🟡 STEP 2 — UAT (QA Approval Required)
 ##############################################################################
-  uat-stage:
-    name: Step 2 - Integration Tests + Deploy UAT
+  uat:
+    name: UAT - Integration Tests + Deploy
     runs-on: self-hosted
-    needs: dev-stage
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_env == 'UAT'
+
+    environment: UAT   # 🔥 QA approval gate happens in GitHub settings
 
     steps:
       - uses: actions/checkout@v4
 
-      # ---------------- INTEGRATION TESTS ----------------
+      - name: Restore
+        run: dotnet restore ledgerflowApi.sln
+
+      - name: Build
+        run: dotnet build ledgerflowApi.sln -c Release
+
       - name: Run Integration Tests
         run: |
           dotnet test tests/LedgerFlow.IntegrationTests/LedgerFlow.IntegrationTests.csproj `
-            --configuration Release `
-            --no-build `
+            -c Release `
             --logger "trx;LogFileName=int.trx" `
             --results-directory ./test-results `
             --settings tests/coverlet.runsettings
@@ -98,35 +107,40 @@ jobs:
           path: "test-results/*.trx"
           reporter: dotnet-trx
 
-      # ---------------- UAT DEPLOY ----------------
       - name: Deploy UAT
-        if: github.ref == 'refs/heads/UAT'
-        shell: powershell
         run: |
           dotnet publish src/ledgerflowApi.API/ledgerflowApi.API.csproj `
             -c Release `
             -r win-x64 `
             --self-contained false `
             -o "D:\Projects\ledgerflowApi\UAT"
+        shell: powershell
 
 
 ##############################################################################
-# STEP 3 — PRODUCTION DEPLOYMENT
+# 🔴 STEP 3 — PROD (PM Approval Required)
 ##############################################################################
-  prod-stage:
-    name: Step 3 - Deploy Production
+  prod:
+    name: PROD - Deploy
     runs-on: self-hosted
-    needs: uat-stage
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_env == 'PROD'
+
+    environment: PROD   # 🔥 PM approval gate
 
     steps:
       - uses: actions/checkout@v4
 
+      - name: Restore
+        run: dotnet restore ledgerflowApi.sln
+
+      - name: Build
+        run: dotnet build ledgerflowApi.sln -c Release
+
       - name: Deploy PROD
-        if: github.ref == 'refs/heads/main'
-        shell: powershell
         run: |
           dotnet publish src/ledgerflowApi.API/ledgerflowApi.API.csproj `
             -c Release `
             -r win-x64 `
             --self-contained false `
             -o "D:\Projects\ledgerflowApi\PROD"
+        shell: powershell
