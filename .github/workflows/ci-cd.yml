@@ -65,7 +65,7 @@ jobs:
             -c Release `
             -r win-x64 `
             --self-contained false `
-            /p:PublishProfile=DEV
+            -o "D:\Projects\ledgerflowApi\DEV"
 
 
 ##############################################################################
@@ -107,7 +107,7 @@ jobs:
             -c Release `
             -r win-x64 `
             --self-contained false `
-            /p:PublishProfile=UAT
+            -o "D:\Projects\ledgerflowApi\UAT"
 
 
 ##############################################################################
@@ -129,4 +129,4 @@ jobs:
             -c Release `
             -r win-x64 `
             --self-contained false `
-            /p:PublishProfile=PROD
+            -o "D:\Projects\ledgerflowApi\PROD"
