@@ -64,38 +64,42 @@ jobs:
       # ── Build ─────────────────────────────────────────────────────────────────
       - name: Build solution (Release)
         run: |
-          dotnet build ledgerflowApi.sln \
-            --configuration Release \
-            --no-restore \
+          dotnet build ledgerflowApi.sln `
+            --configuration Release `
+            --no-restore `
             --verbosity minimal
+        shell: powershell
 
       # ── Unit tests ────────────────────────────────────────────────────────────
       # Run first — they're fast (~5 seconds) and catch most logic bugs.
       # --no-build reuses the already-built output from the step above.
       - name: Run unit tests
         run: |
-          dotnet test tests/LedgerFlow.UnitTests/LedgerFlow.UnitTests.csproj \
-            --configuration Release \
-            --no-build \
-            --verbosity normal \
-            --logger "trx;LogFileName=unit-test-results.trx" \
-            --results-directory ./test-results \
-            --collect:"XPlat Code Coverage" \
+          dotnet test tests/LedgerFlow.UnitTests/LedgerFlow.UnitTests.csproj `
+            --configuration Release `
+            --no-build `
+            --verbosity normal `
+            --logger "trx;LogFileName=unit-test-results.trx" `
+            --results-directory ./test-results `
+            --collect:"XPlat Code Coverage" `
             --settings tests/coverlet.runsettings
+        shell: powershell
 
       # ── Integration tests ──────────────────────────────────────────────────────
       # Run after unit tests. They're slower (~30–60 seconds) because they boot
       # the ASP.NET pipeline. They use an in-memory database — no real SQL needed.
       - name: Run integration tests
         run: |
-          dotnet test tests/LedgerFlow.IntegrationTests/LedgerFlow.IntegrationTests.csproj \
-            --configuration Release \
-            --no-build \
-            --verbosity normal \
-            --logger "trx;LogFileName=integration-test-results.trx" \
-            --results-directory ./test-results \
-            --collect:"XPlat Code Coverage" \
+          dotnet test tests/LedgerFlow.IntegrationTests/LedgerFlow.IntegrationTests.csproj `
+            --configuration Release `
+            --no-build `
+            --verbosity normal `
+            --logger "trx;LogFileName=integration-test-results.trx" `
+            --results-directory ./test-results `
+            --collect:"XPlat Code Coverage" `
             --settings tests/coverlet.runsettings
+        shell: powershell
+
         env:
           # Pass environment-specific config into integration tests via env vars.
           # The test WebApplicationFactory overrides these in-memory, but having
