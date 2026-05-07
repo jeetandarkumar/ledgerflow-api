@@ -150,7 +150,7 @@ public class AuthControllerTests : IntegrationTestBase
     {
         var msg = new HttpRequestMessage(HttpMethod.Post, "/api/v1/auth/login")
         {
-            Content = JsonContent.Create(new { })
+            Content = JsonContent.Create(new { }) 
         };
         msg.Headers.Add("X-Tenant-Id", Guid.NewGuid().ToString());
 
