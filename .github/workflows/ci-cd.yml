@@ -129,16 +129,27 @@ jobs:
 
       # ── Notify on failure ──────────────────────────────────────────────────────
       - name: Notify team on build/test failure
-        if: failure() && secrets.TEAMS_WEBHOOK_URL != ''
-        run: |
-          $body = @{
-            text = "❌ *Build/Test failed* on branch ``${{ github.ref_name }}``\n" +
-                   "Commit: ${{ github.sha }}\nBy: ${{ github.actor }}\n" +
-                   "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          } | ConvertTo-Json
-          Invoke-RestMethod -Uri "${{ secrets.TEAMS_WEBHOOK_URL }}" -Method Post `
-            -ContentType "application/json" -Body $body
+        if: failure()
         shell: powershell
+        env:
+          TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+
+        run: |
+          if (-not $env:TEAMS_WEBHOOK_URL) {
+            Write-Host "Webhook not configured, skipping notification"
+            exit 0
+          }
+
+          $body = @{
+            text = "❌ Build/Test failed on branch $env:GITHUB_REF_NAME`n" +
+                  "Commit: $env:GITHUB_SHA`nBy: $env:GITHUB_ACTOR`n" +
+                  "Run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          } | ConvertTo-Json -Compress
+
+          Invoke-RestMethod -Uri $env:TEAMS_WEBHOOK_URL `
+            -Method Post `
+            -ContentType "application/json" `
+            -Body $body
 
 ##############################################################################
 # DEV DEPLOYMENT
