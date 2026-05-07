@@ -129,7 +129,7 @@ public class InvoicesControllerTests : IntegrationTestBase
         body!.InvoiceNumber.Should().Be("INV-2024-000001");
     }
 
-    [Fact]
+    [Fact] 
     public async Task GetInvoice_NotFound_Returns404()
     {
         // Arrange
