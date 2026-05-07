@@ -33,14 +33,15 @@ jobs:
         run: dotnet build ledgerflowApi.sln -c Release
 
       - name: Run Unit Tests
-        shell: powershell
         run: |
           dotnet test tests/LedgerFlow.UnitTests/LedgerFlow.UnitTests.csproj `
-            -c Release `
+            --configuration Release `
+            --no-build `
             --logger "trx;LogFileName=unit.trx" `
             --results-directory ./test-results `
             --collect:"XPlat Code Coverage" `
             --settings tests/coverlet.runsettings
+        shell: powershell
 
       - name: Publish Unit Test Results
         uses: dorny/test-reporter@v2
@@ -78,13 +79,14 @@ jobs:
         run: dotnet build ledgerflowApi.sln -c Release
 
       - name: Run Integration Tests
-        shell: powershell
         run: |
           dotnet test tests/LedgerFlow.IntegrationTests/LedgerFlow.IntegrationTests.csproj `
-            -c Release `
+            --configuration Release `
+            --no-build `
             --logger "trx;LogFileName=int.trx" `
             --results-directory ./test-results `
             --settings tests/coverlet.runsettings
+        shell: powershell
 
       - name: Publish Integration Results
         uses: dorny/test-reporter@v2
