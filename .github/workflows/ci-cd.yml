@@ -59,11 +59,13 @@ jobs:
       # ---------------- DEV DEPLOY ----------------
       - name: Deploy DEV
         if: github.ref == 'refs/heads/Dev'
+        shell: powershell
         run: |
           dotnet publish src/ledgerflowApi.API/ledgerflowApi.API.csproj `
-            --configuration Release `
+            -c Release `
+            -r win-x64 `
+            --self-contained false `
             /p:PublishProfile=DEV
-        shell: powershell
 
 
 ##############################################################################
@@ -99,11 +101,13 @@ jobs:
       # ---------------- UAT DEPLOY ----------------
       - name: Deploy UAT
         if: github.ref == 'refs/heads/UAT'
+        shell: powershell
         run: |
           dotnet publish src/ledgerflowApi.API/ledgerflowApi.API.csproj `
-            --configuration Release `
+            -c Release `
+            -r win-x64 `
+            --self-contained false `
             /p:PublishProfile=UAT
-        shell: powershell
 
 
 ##############################################################################
@@ -119,8 +123,10 @@ jobs:
 
       - name: Deploy PROD
         if: github.ref == 'refs/heads/main'
+        shell: powershell
         run: |
           dotnet publish src/ledgerflowApi.API/ledgerflowApi.API.csproj `
-            --configuration Release `
+            -c Release `
+            -r win-x64 `
+            --self-contained false `
             /p:PublishProfile=PROD
-        shell: powershell
