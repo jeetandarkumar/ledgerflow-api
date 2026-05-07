@@ -145,7 +145,7 @@ public class AuthControllerTests : IntegrationTestBase
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
-    [Fact]
+    [Fact] 
     public async Task Login_EmptyBody_Returns400()
     {
         var msg = new HttpRequestMessage(HttpMethod.Post, "/api/v1/auth/login")
