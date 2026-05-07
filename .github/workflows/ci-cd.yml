@@ -43,7 +43,7 @@ jobs:
             --settings tests/coverlet.runsettings
 
       - name: Publish Unit Test Results
-        uses: dorny/test-reporter@v1
+        uses: dorny/test-reporter@v2
         if: always()
         with:
           name: Unit Tests
@@ -87,7 +87,7 @@ jobs:
             --settings tests/coverlet.runsettings
 
       - name: Publish Integration Results
-        uses: dorny/test-reporter@v1
+        uses: dorny/test-reporter@v2
         if: always()
         with:
           name: Integration Tests
