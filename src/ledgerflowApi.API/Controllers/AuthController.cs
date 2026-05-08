@@ -25,8 +25,7 @@ public class AuthController : BaseApiController
     /// <summary>Authenticates a user and returns a JWT access token.</summary>
     /// <remarks>
     /// Supply the tenant GUID in the `X-Tenant-Id` header.
-    ///
-    /// On success returns `accessToken` (valid 60 min) and `refreshToken`.
+    /// Returns an access token (valid 60 min) and a refresh token.
     /// After 5 consecutive failures the account is locked for 30 minutes.
     /// </remarks>
     [HttpPost("login")]
@@ -65,11 +64,9 @@ public class AuthController : BaseApiController
 
     /// <summary>Registers a new user within the caller's tenant. Requires Admin role.</summary>
     /// <remarks>
-    /// The new user is created in the **same tenant** as the calling admin.
-    ///
-    /// Password rules: min 8 chars, max 72, must contain uppercase, lowercase, digit, special char.
-    ///
-    /// Valid roles: `Viewer`, `Member`, `Admin`. `SuperAdmin` is never assignable here.
+    /// Creates the user in the same tenant as the calling admin.
+    /// Password rules: min 8 chars, max 72, must include uppercase, lowercase, digit, and special character.
+    /// Valid roles: `Viewer`, `Member`, `Admin`. `SuperAdmin` cannot be assigned here.
     /// </remarks>
     [HttpPost("register")]
     [Authorize(Policy = AuthorizationPolicies.RequireAdmin)]
@@ -83,16 +80,15 @@ public class AuthController : BaseApiController
         [FromBody] RegisterUserRequest request,
         CancellationToken cancellationToken)
     {
-        var tenantId = _currentUser.TenantId;
-        var callerId = _currentUser.UserId;
-        if (tenantId is null || callerId is null) return Unauthorized();
+        if (_currentUser.TenantId is not { } tenantId || _currentUser.UserId is not { } callerId)
+            return Unauthorized();
 
         if (!Enum.TryParse<UserRole>(request.Role, ignoreCase: true, out var role))
             role = UserRole.Member;
 
         var command = new RegisterUserCommand(
-            TenantId: tenantId.Value,
-            CallerUserId: callerId.Value,
+            TenantId: tenantId,
+            CallerUserId: callerId,
             CallerUserName: _currentUser.UserName ?? "Unknown",
             FirstName: request.FirstName,
             LastName: request.LastName,

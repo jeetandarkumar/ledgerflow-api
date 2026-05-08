@@ -18,14 +18,10 @@ public class LoggingBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, 
         RequestHandlerDelegate<TResponse> next,
         CancellationToken cancellationToken)
     {
-        var requestName = typeof(TRequest).Name;
-
-        _logger.LogInformation("Handling request: {RequestName} {@Request}", requestName, request);
-
+        var name = typeof(TRequest).Name;
+        _logger.LogDebug("Handling {RequestName}", name);
         var response = await next();
-
-        _logger.LogInformation("Request handled: {RequestName}", requestName);
-
+        _logger.LogDebug("Handled {RequestName}", name);
         return response;
     }
 }

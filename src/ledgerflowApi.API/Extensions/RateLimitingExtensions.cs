@@ -4,21 +4,10 @@ using Microsoft.AspNetCore.RateLimiting;
 namespace ledgerflowApi.API.Extensions;
 
 /// <summary>
-/// Rate limiting configuration.
-///
-/// Three policies:
-///   "auth"    — Applied to login/register. Strict: 10 req/min per IP.
-///               Protects against credential-stuffing and brute-force attacks.
-///               Uses a fixed window so bursts after a window reset don't sneak through.
-///
-///   "api"     — Applied to all other authenticated endpoints. 120 req/min per user.
-///               Generous enough for legitimate use, tight enough to prevent abuse.
-///               Keyed on user ID so one bad actor doesn't throttle other users.
-///
-///   "strict"  — Applied to sensitive mutations (void invoice, change role).
-///               30 req/min per user. Additional layer on top of the "api" policy.
-///
-/// 429 responses include a Retry-After header so clients know when to retry.
+/// Three rate limiting policies:
+///   "auth"    — 10 req/min per IP. Applied to login/register.
+///   "api"     — 120 req/min per authenticated user (30/min for anonymous by IP).
+///   "strict"  — 30 req/min per user. Applied to sensitive mutations.
 /// </summary>
 public static class RateLimitingExtensions
 {
@@ -30,7 +19,6 @@ public static class RateLimitingExtensions
     {
         services.AddRateLimiter(options =>
         {
-            // ── Auth endpoints ─────────────────────────────────────────────────
             options.AddPolicy(AuthPolicy, context =>
                 RateLimitPartition.GetFixedWindowLimiter(
                     partitionKey: context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
@@ -39,13 +27,11 @@ public static class RateLimitingExtensions
                         PermitLimit = 10,
                         Window = TimeSpan.FromMinutes(1),
                         QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
-                        QueueLimit = 0   // No queuing — reject immediately when limit hit
+                        QueueLimit = 0
                     }));
 
-            // ── General API endpoints ──────────────────────────────────────────
             options.AddPolicy(ApiPolicy, context =>
             {
-                // Authenticated: key on user ID for per-user rate limiting
                 var userId = context.User?.FindFirst(
                     System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
 
@@ -56,12 +42,11 @@ public static class RateLimitingExtensions
                         {
                             PermitLimit = 120,
                             Window = TimeSpan.FromMinutes(1),
-                            SegmentsPerWindow = 6,   // 6×10-second segments
+                            SegmentsPerWindow = 6,
                             QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                             QueueLimit = 5
                         });
 
-                // Unauthenticated: key on IP
                 return RateLimitPartition.GetFixedWindowLimiter(
                     partitionKey: context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
                     factory: _ => new FixedWindowRateLimiterOptions
@@ -73,16 +58,15 @@ public static class RateLimitingExtensions
                     });
             });
 
-            // ── Sensitive mutation endpoints ───────────────────────────────────
             options.AddPolicy(StrictPolicy, context =>
             {
-                var userId = context.User?.FindFirst(
+                var key = context.User?.FindFirst(
                     System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
                     ?? context.Connection.RemoteIpAddress?.ToString()
                     ?? "unknown";
 
                 return RateLimitPartition.GetFixedWindowLimiter(
-                    partitionKey: $"strict:{userId}",
+                    partitionKey: $"strict:{key}",
                     factory: _ => new FixedWindowRateLimiterOptions
                     {
                         PermitLimit = 30,
@@ -92,17 +76,12 @@ public static class RateLimitingExtensions
                     });
             });
 
-            // 429 response with Retry-After header
             options.OnRejected = async (context, cancellationToken) =>
             {
                 context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
 
-                if (context.Lease.TryGetMetadata(
-                    MetadataName.RetryAfter, out var retryAfter))
-                {
-                    context.HttpContext.Response.Headers.RetryAfter =
-                        ((int)retryAfter.TotalSeconds).ToString();
-                }
+                if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+                    context.HttpContext.Response.Headers.RetryAfter = ((int)retryAfter.TotalSeconds).ToString();
 
                 context.HttpContext.Response.ContentType = "application/problem+json";
                 await context.HttpContext.Response.WriteAsync(

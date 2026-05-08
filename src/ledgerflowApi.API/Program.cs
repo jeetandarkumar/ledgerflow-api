@@ -10,11 +10,10 @@ Log.Logger = new LoggerConfiguration()
 
 try
 {
-    Log.Information("Starting ledgerflowApi API");
+    Log.Information("Starting LedgerFlow API");
 
     var builder = WebApplication.CreateBuilder(args);
 
-    // ── Serilog ───────────────────────────────────────────────────────────────
     builder.Host.UseSerilog((ctx, svc, cfg) => cfg
         .ReadFrom.Configuration(ctx.Configuration)
         .ReadFrom.Services(svc)
@@ -22,22 +21,15 @@ try
         .Enrich.WithEnvironmentName()
         .Enrich.WithThreadId());
 
-    // ── MVC + Swagger ─────────────────────────────────────────────────────────
     builder.Services.AddControllers();
     builder.Services.AddEndpointsApiExplorer();
     builder.Services.AddSwaggerConfiguration();
 
-    // ── Application & Infrastructure ─────────────────────────────────────────
     builder.Services.AddApplicationServices();
     builder.Services.AddInfrastructureServices(builder.Configuration);
-
-    // ── Auth: JWT bearer + authorization policies ────────────────────────────
     builder.Services.AddJwtAuthentication(builder.Configuration);
-
-    // ── Rate limiting ─────────────────────────────────────────────────────────
     builder.Services.AddRateLimiting();
 
-    // ── CORS ──────────────────────────────────────────────────────────────────
     builder.Services.AddCors(options =>
     {
         options.AddPolicy("DefaultPolicy", policy =>
@@ -56,10 +48,8 @@ try
 
     builder.Services.AddHealthChecks();
 
-    // ─────────────────────────────────────────────────────────────────────────
     var app = builder.Build();
 
-    // ── Middleware pipeline (order matters) ───────────────────────────────────
     app.UseMiddleware<GlobalExceptionHandlingMiddleware>();
 
     app.UseSerilogRequestLogging(opts =>
@@ -68,12 +58,8 @@ try
     if (app.Environment.IsDevelopment())
         app.UseSwaggerConfiguration();
 
-    //app.UseHttpsRedirection();
     app.UseCors("DefaultPolicy");
-
-    // Rate limiting before auth so rejected requests don't hit the DB
     app.UseRateLimiter();
-
     app.UseAuthentication();
     app.UseMiddleware<TenantResolutionMiddleware>();
     app.UseAuthorization();

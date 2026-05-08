@@ -1,4 +1,3 @@
-using ledgerflowApi.Application.Common.Exceptions;
 using ledgerflowApi.Application.Common.Interfaces;
 using ledgerflowApi.Application.Common.Models;
 using ledgerflowApi.Application.Features.Auth.DTOs;
@@ -12,14 +11,6 @@ using Microsoft.Extensions.Logging;
 
 namespace ledgerflowApi.Application.Features.Auth.Commands.RegisterUser;
 
-// ── Command ──────────────────────────────────────────────────────────────────
-
-/// <summary>
-/// Creates a new user account within a tenant. Admin-only operation.
-///
-/// CallerUserId is the authenticated Admin performing the action,
-/// used for the audit log entry.
-/// </summary>
 public sealed record RegisterUserCommand(
     Guid TenantId,
     Guid CallerUserId,
@@ -31,37 +22,31 @@ public sealed record RegisterUserCommand(
     UserRole Role
 ) : IRequest<Result<AuthResponse>>;
 
-// ── Validator ────────────────────────────────────────────────────────────────
-
 public sealed class RegisterUserCommandValidator : AbstractValidator<RegisterUserCommand>
 {
     public RegisterUserCommandValidator()
     {
-        RuleFor(x => x.TenantId)
-            .NotEmpty().WithMessage("Tenant context is required.");
+        RuleFor(x => x.TenantId).NotEmpty();
 
         RuleFor(x => x.FirstName)
             .NotEmpty().WithMessage("First name is required.")
-            .MaximumLength(100).WithMessage("First name cannot exceed 100 characters.")
-            .Matches(@"^[\p{L}\p{M}'\- ]+$")
-            .WithMessage("First name contains invalid characters.");
+            .MaximumLength(100)
+            .Matches(@"^[\p{L}\p{M}'\- ]+$").WithMessage("First name contains invalid characters.");
 
         RuleFor(x => x.LastName)
             .NotEmpty().WithMessage("Last name is required.")
-            .MaximumLength(100).WithMessage("Last name cannot exceed 100 characters.")
-            .Matches(@"^[\p{L}\p{M}'\- ]+$")
-            .WithMessage("Last name contains invalid characters.");
+            .MaximumLength(100)
+            .Matches(@"^[\p{L}\p{M}'\- ]+$").WithMessage("Last name contains invalid characters.");
 
         RuleFor(x => x.Email)
             .NotEmpty().WithMessage("Email is required.")
             .EmailAddress().WithMessage("Email must be a valid email address.")
-            .MaximumLength(256).WithMessage("Email cannot exceed 256 characters.");
+            .MaximumLength(256);
 
         RuleFor(x => x.Password)
             .NotEmpty().WithMessage("Password is required.")
             .MinimumLength(8).WithMessage("Password must be at least 8 characters.")
             .MaximumLength(72).WithMessage("Password cannot exceed 72 characters.")
-            // BCrypt silently truncates at 72 bytes — we reject rather than silently truncate.
             .Matches(@"[A-Z]").WithMessage("Password must contain at least one uppercase letter.")
             .Matches(@"[a-z]").WithMessage("Password must contain at least one lowercase letter.")
             .Matches(@"\d").WithMessage("Password must contain at least one digit.")
@@ -73,24 +58,6 @@ public sealed class RegisterUserCommandValidator : AbstractValidator<RegisterUse
     }
 }
 
-// ── Handler ──────────────────────────────────────────────────────────────────
-
-/// <summary>
-/// Full registration flow:
-///   1. Verify the tenant exists and can accept new users.
-///   2. Check the email isn't already registered within this tenant.
-///   3. Hash the password (BCrypt, work factor 11).
-///   4. Create the User aggregate via the factory method (which fires UserCreatedEvent).
-///   5. Persist user + audit log in a single transaction.
-///   6. Issue tokens immediately so the caller can use the new account without a second login.
-///
-/// Why return tokens on registration?
-/// The API is used by an Admin creating accounts for colleagues — returning a token
-/// is not useful here (the Admin isn't logging in as the new user). But consistent with
-/// the AuthResponse shape, we return a token for the NEW user so the Admin can
-/// optionally hand the token off to the new user in an onboarding flow.
-/// The new user will always need to do a proper login on their own device anyway.
-/// </summary>
 public sealed class RegisterUserCommandHandler : IRequestHandler<RegisterUserCommand, Result<AuthResponse>>
 {
     private readonly IUserRepository _userRepository;
@@ -119,20 +86,15 @@ public sealed class RegisterUserCommandHandler : IRequestHandler<RegisterUserCom
         _logger = logger;
     }
 
-    public async Task<Result<AuthResponse>> Handle(
-        RegisterUserCommand request,
-        CancellationToken cancellationToken)
+    public async Task<Result<AuthResponse>> Handle(RegisterUserCommand request, CancellationToken cancellationToken)
     {
-        // ── Step 1: Verify tenant ─────────────────────────────────────────────
         var tenant = await _tenantRepository.GetByIdAsync(request.TenantId, cancellationToken);
         if (tenant is null)
             throw new NotFoundException(nameof(Tenant), request.TenantId);
 
         if (tenant.Status is TenantStatus.Cancelled)
-            throw new DomainException(
-                "Cannot register users on a cancelled tenant.");
+            throw new DomainException("Cannot register users on a cancelled tenant.");
 
-        // ── Step 2: Check email uniqueness within tenant ──────────────────────
         var emailTaken = await _userRepository.EmailExistsAsync(
             request.TenantId,
             request.Email.ToLowerInvariant(),
@@ -142,12 +104,8 @@ public sealed class RegisterUserCommandHandler : IRequestHandler<RegisterUserCom
             return Result<AuthResponse>.Failure(
                 $"The email address '{request.Email}' is already registered on this account.");
 
-        // ── Step 3: Hash the password ─────────────────────────────────────────
-        // BCrypt work factor 11 (~300ms on modern hardware) — slow enough to make
-        // offline brute-force attacks impractical, fast enough for a registration endpoint.
         var passwordHash = _passwordHasher.Hash(request.Password);
 
-        // ── Step 4: Build the domain object ───────────────────────────────────
         var user = User.Create(
             tenantId: request.TenantId,
             firstName: request.FirstName,
@@ -156,7 +114,6 @@ public sealed class RegisterUserCommandHandler : IRequestHandler<RegisterUserCom
             passwordHash: passwordHash,
             role: request.Role);
 
-        // ── Step 5: Persist atomically ────────────────────────────────────────
         await _unitOfWork.ExecuteInTransactionAsync(async () =>
         {
             await _userRepository.AddAsync(user, cancellationToken);
@@ -180,18 +137,13 @@ public sealed class RegisterUserCommandHandler : IRequestHandler<RegisterUserCom
             await _auditLogRepository.AddAsync(audit, cancellationToken);
         }, cancellationToken);
 
-        _logger.LogInformation(
-            "User {UserId} ({Email}) registered by {CallerUserId} on tenant {TenantId} with role {Role}",
+        _logger.LogInformation("User {UserId} ({Email}) registered by {CallerUserId} on tenant {TenantId} with role {Role}",
             user.Id, user.Email, request.CallerUserId, request.TenantId, request.Role);
-
-        // ── Step 6: Issue tokens for the new user ─────────────────────────────
-        var accessToken = _tokenService.GenerateAccessToken(user);
-        var refreshToken = _tokenService.GenerateRefreshToken();
 
         return Result<AuthResponse>.Success(new AuthResponse
         {
-            AccessToken = accessToken,
-            RefreshToken = refreshToken,
+            AccessToken = _tokenService.GenerateAccessToken(user),
+            RefreshToken = _tokenService.GenerateRefreshToken(),
             ExpiresAt = DateTime.UtcNow.AddMinutes(60),
             User = new UserAuthInfo
             {
