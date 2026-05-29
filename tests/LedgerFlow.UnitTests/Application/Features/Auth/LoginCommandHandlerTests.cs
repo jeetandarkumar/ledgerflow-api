@@ -73,7 +73,7 @@ public class LoginCommandHandlerTests
         _userRepo.Setup(r => r.GetByEmailAsync(tenant.Id, command.Email, It.IsAny<CancellationToken>()))
             .ReturnsAsync(user);
         _hasher.Setup(h => h.Verify(command.Password, user.PasswordHash)).Returns(true);
-        _tokenService.Setup(t => t.GenerateAccessToken(user)).Returns("access-token");
+        _tokenService.Setup(t => t.GenerateAccessToken(user, "USD")).Returns("access-token");
         _tokenService.Setup(t => t.GenerateRefreshToken()).Returns("refresh-token");
         _unitOfWork.Setup(u => u.ExecuteInTransactionAsync(It.IsAny<Func<Task>>(), It.IsAny<CancellationToken>()))
             .Callback<Func<Task>, CancellationToken>((fn, _) => fn().GetAwaiter().GetResult());

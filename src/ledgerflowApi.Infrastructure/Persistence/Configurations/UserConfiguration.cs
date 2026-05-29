@@ -12,17 +12,12 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
         builder.HasKey(u => u.Id);
         builder.Property(u => u.Id).ValueGeneratedNever();
 
-        // Ignore domain infrastructure
         builder.Ignore(u => u.DomainEvents);
-
-        // FullName is a computed property — not a column
         builder.Ignore(u => u.FullName);
 
         builder.Property(u => u.UpdatedAt).IsConcurrencyToken();
         builder.Property(u => u.TenantId).IsRequired();
 
-        // Tenant navigation — FK only, no cascade delete
-        // We explicitly ignore the reverse navigation since Tenant.Ignore(Users) handles it
         builder.HasOne(u => u.Tenant)
             .WithMany()
             .HasForeignKey(u => u.TenantId)
@@ -36,8 +31,10 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
             .IsUnique()
             .HasDatabaseName("UX_Users_TenantId_Email");
 
-        // BCrypt $2a$ hashes are always 60 chars
-        builder.Property(u => u.PasswordHash).IsRequired().HasMaxLength(60);
+        // FIX: BCrypt.Net-Next hashes are 60 chars for $2a$ but can reach 72.
+        // Using 128 gives headroom for future algorithm changes (Argon2, etc.)
+        // without requiring a migration at that point.
+        builder.Property(u => u.PasswordHash).IsRequired().HasMaxLength(128);
 
         builder.Property(u => u.Role)
             .IsRequired()
@@ -59,6 +56,5 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
 
         builder.HasIndex(u => new { u.TenantId, u.IsActive })
             .HasDatabaseName("IX_Users_TenantId_IsActive");
-        builder.ToTable("Users", tb => tb.HasTrigger("trg_Users_AfterUpdate"));
     }
 }

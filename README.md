@@ -1,218 +1,299 @@
 # LedgerFlow API
 
-A multi-tenant financial SaaS API built with .NET 8. Handles invoice lifecycle management and payment recording for multiple independent tenants on a shared platform.
+A multi-tenant financial API built with .NET 8, Clean Architecture, and a full DDD domain model. It covers the complete invoice lifecycle, payment processing (including refunds), JWT auth with per-tenant context, and a layered audit trail backed by SQL Server triggers and application-level audit logs.
 
-## Overview
+Built as a portfolio project — not a toy CRUD app.
 
-LedgerFlow lets tenant businesses create, issue, and track invoices, record payments and refunds, and manage users within their own isolated workspace. Every piece of data is strictly tenant-scoped — there's no way for one tenant to access another's data.
+---
 
-**Core capabilities:**
-- Invoice lifecycle: Draft → Issued → PartiallyPaid → Paid (or Voided)
-- Payment and refund recording with idempotency (safe webhook replay)
-- JWT-based multi-tenant authentication with role-based access control
-- Full audit log for all financial state changes
-- Account lockout after repeated failed login attempts
+## What's in here
 
-## Tech Stack
+The domain handles the full invoice lifecycle: Draft → Issued → PartiallyPaid / Paid / Overdue → Voided. Payments and refunds are separate aggregates that reference invoices by ID, keeping the invoice's paid amount updated atomically with the payment record.
 
-| Layer | Technology |
-|---|---|
-| Runtime | .NET 8, ASP.NET Core |
-| Architecture | Clean Architecture, CQRS via MediatR |
-| Database | SQL Server + Entity Framework Core 8 |
-| Cache | Redis (falls back to in-memory if not configured) |
-| Auth | JWT Bearer (HMAC-SHA256), BCrypt password hashing |
-| Validation | FluentValidation (pipeline behavior) |
-| Logging | Serilog (console + rolling file) |
-| Testing | xUnit, Moq, FluentAssertions, WebApplicationFactory |
+Multi-tenancy is enforced at the type level via `TenantEntity` — every financial record carries a `TenantId` and the domain throws `TenantMismatchException` if records from different tenants are mixed. The `TenantResolutionMiddleware` rejects authenticated requests with no valid `tenant_id` claim before they reach any handler.
+
+Auth uses BCrypt (work factor 11) with a timing-safe dummy hash path for missing users so response time doesn't leak whether an email exists. Accounts lock after 5 failed attempts for 30 minutes.
+
+---
 
 ## Project Structure
 
 ```
-src/
-├── ledgerflowApi.Domain/           # Entities, value objects, domain exceptions, interfaces
-├── ledgerflowApi.Application/      # Commands, queries, validators, MediatR pipeline behaviors
-├── ledgerflowApi.Infrastructure/   # EF Core, repositories, JWT, BCrypt, Redis
-└── ledgerflowApi.API/              # Controllers, middleware, startup
-tests/
-├── LedgerFlow.UnitTests/           # Domain logic, command handlers, validators
-└── LedgerFlow.IntegrationTests/    # Full HTTP pipeline against in-memory database
+ledgerflowApi/
+├── src/
+│   ├── ledgerflowApi.Domain/           # Entities, value objects, domain exceptions, events
+│   ├── ledgerflowApi.Application/      # CQRS handlers, FluentValidation, MediatR behaviors
+│   ├── ledgerflowApi.Infrastructure/   # EF Core, repositories, Redis, JWT, BCrypt
+│   └── ledgerflowApi.API/              # Controllers, middleware, rate limiting, Swagger
+└── tests/
+    ├── CleanArch.UnitTests/
+    └── CleanArch.IntegrationTests/
 ```
+
+---
+
+## Tech Stack
+
+| Concern | Choice |
+|---|---|
+| Framework | .NET 8 / ASP.NET Core |
+| ORM | Entity Framework Core 8 (SQL Server) |
+| CQRS | MediatR 12 |
+| Validation | FluentValidation 11 |
+| Auth | JWT Bearer (HMAC-SHA256) |
+| Password hashing | BCrypt.Net-Next (work factor 11) |
+| Caching | Redis via StackExchange.Redis |
+| Logging | Serilog (console + rolling file) |
+| API Docs | Swagger / OpenAPI |
+| Containers | Docker + Docker Compose |
+
+---
 
 ## Getting Started
 
-### Prerequisites
-
-- [.NET 8 SDK](https://dotnet.microsoft.com/download)
-- SQL Server (local or Docker)
-- Redis (optional — falls back to in-memory cache if not configured)
-
-### Run with Docker Compose
-
-The easiest way to get everything running:
+### Run with Docker (quickest)
 
 ```bash
-docker compose up -d
+docker-compose up -d
 ```
 
-API: `http://localhost:5000`  
-Swagger UI: `http://localhost:5000/swagger`
+API: `http://localhost:5000`
+Swagger: `http://localhost:5000/swagger`
 
-### Run Locally
+SQL Server and Redis start first; the API waits for their health checks before accepting connections. On first startup the database is migrated and demo seed data is created automatically.
 
-**1. Configure secrets**
+### Run locally
 
-Never commit secrets to source control. Use .NET user secrets for local development:
+**Prerequisites:** .NET 8 SDK, SQL Server (local or Docker), Redis (optional — falls back to in-memory cache)
+
+1. Update `src/ledgerflowApi.API/appsettings.Development.json` with your connection strings (already filled with sensible local defaults).
+
+2. Run the API — migrations and seed data are applied automatically on startup in Development:
 
 ```bash
 cd src/ledgerflowApi.API
-
-dotnet user-secrets set "ConnectionStrings:DefaultConnection" "Server=localhost;Database=ledgerflowApiDb;Trusted_Connection=True;TrustServerCertificate=True;"
-dotnet user-secrets set "JwtSettings:SecretKey" "your-local-secret-at-least-32-chars"
+dotnet run
 ```
 
-**2. Apply migrations**
+On first run the console will print the seeded Tenant ID:
 
-```bash
-dotnet ef database update \
-  --project src/ledgerflowApi.Infrastructure \
-  --startup-project src/ledgerflowApi.API
+```
+DbSeeder: seed complete.
+  Tenant ID : xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+  Admin     : admin@democorp.example  / Demo@1234!
+  Member    : member@democorp.example / Demo@1234!
+  Use TenantId in the X-Tenant-Id header when calling /api/v1/auth/login
 ```
 
-**3. Start the API**
+Copy that Tenant ID — you need it for the `X-Tenant-Id` header on every login request.
 
-```bash
-dotnet run --project src/ledgerflowApi.API
-```
+### Environment Variables
 
-## Configuration Reference
+| Variable | Description |
+|---|---|
+| `ConnectionStrings__DefaultConnection` | SQL Server connection string |
+| `ConnectionStrings__Redis` | Redis connection string (optional) |
+| `JwtSettings__SecretKey` | Signing key — min 32 chars |
+| `JwtSettings__Issuer` | Token issuer |
+| `JwtSettings__Audience` | Token audience |
+| `JwtSettings__ExpirationMinutes` | Access token lifetime (default: 60) |
 
-All settings can be overridden via environment variables using `__` as the separator (e.g. `JwtSettings__SecretKey`).
+---
 
-| Setting | Description | Required |
-|---|---|---|
-| `ConnectionStrings:DefaultConnection` | SQL Server connection string | Yes |
-| `ConnectionStrings:Redis` | Redis connection string | No (uses in-memory) |
-| `JwtSettings:SecretKey` | Signing key, min 32 characters | Yes |
-| `JwtSettings:Issuer` | Token issuer claim | Yes |
-| `JwtSettings:Audience` | Token audience claim | Yes |
-| `JwtSettings:ExpirationMinutes` | Access token lifetime (default: 60) | No |
-| `Cors:AllowedOrigins` | Array of allowed CORS origins | No |
+## API Overview
 
-> **Production:** Always supply `JwtSettings:SecretKey` via an environment variable or secrets manager — never commit it to source control.
+All routes are tenant-scoped. The tenant is resolved from the `tenant_id` claim in the JWT — there is no way to access another tenant's data even with a valid token.
 
-## API Endpoints
+### Authentication
 
-All endpoints are prefixed with `/api/v1`.
-
-### Auth
-
-| Method | Path | Auth | Description |
+| Method | Route | Auth | Description |
 |---|---|---|---|
-| `POST` | `/auth/login` | None | Authenticate and receive a JWT. Requires `X-Tenant-Id` header. |
-| `POST` | `/auth/register` | Admin | Create a new user within the caller's tenant. |
+| POST | `/api/v1/auth/login` | None | Returns JWT + refresh token |
+| POST | `/api/v1/auth/register` | Admin | Creates a new user in the caller's tenant |
+
+Login requires the `X-Tenant-Id` header (tenant GUID). On success you get an `accessToken` (60 min) and a `refreshToken`.
+
+**Login request:**
+```json
+POST /api/v1/auth/login
+X-Tenant-Id: <tenant-guid>
+
+{
+  "email": "admin@democorp.example",
+  "password": "Demo@1234!"
+}
+```
+
+**Response:**
+```json
+{
+  "accessToken": "eyJ...",
+  "refreshToken": "base64string",
+  "expiresAt": "2025-01-01T01:00:00Z",
+  "user": {
+    "id": "...",
+    "fullName": "Admin User",
+    "email": "admin@democorp.example",
+    "role": "Admin",
+    "tenantId": "...",
+    "tenantName": "Demo Corp"
+  }
+}
+```
+
+---
 
 ### Invoices
 
-| Method | Path | Auth | Description |
+| Method | Route | Auth | Description |
 |---|---|---|---|
-| `GET` | `/invoices` | Any | List invoices with optional `?status=` filter. Paginated. |
-| `GET` | `/invoices/{id}` | Any | Get a single invoice. |
-| `POST` | `/invoices` | Member+ | Create a new Draft invoice. |
-| `POST` | `/invoices/{id}/issue` | Member+ | Issue a Draft invoice (sets due date, freezes line items). |
-| `POST` | `/invoices/{id}/void` | Admin | Void an invoice permanently. Requires a reason. |
-| `POST` | `/invoices/{id}/payments` | Member+ | Record a payment or refund. |
+| GET | `/api/v1/invoices` | Any | Paginated list, optional `?status=` filter |
+| GET | `/api/v1/invoices/{id}` | Any | Single invoice |
+| POST | `/api/v1/invoices` | Member+ | Create draft |
+| POST | `/api/v1/invoices/{id}/issue` | Member+ | Issue draft to customer |
+| POST | `/api/v1/invoices/{id}/void` | Admin | Void (requires reason, min 10 chars) |
+| POST | `/api/v1/invoices/{id}/payments` | Member+ | Record payment or refund |
 
-### Users
+**Create invoice:**
+```json
+POST /api/v1/invoices
+Authorization: Bearer <token>
 
-| Method | Path | Auth | Description |
-|---|---|---|---|
-| `GET` | `/users/{id}` | Any | Get a user profile (tenant-scoped). |
+{
+  "customerName": "Acme Corp",
+  "customerEmail": "billing@acmecorp.example",
+  "currency": "USD",
+  "taxRatePercentage": 10,
+  "discountPercentage": 0,
+  "lineItems": [
+    {
+      "description": "Consulting – October 2024",
+      "unitPrice": 1500.00,
+      "quantity": 3,
+      "discountPercentage": 0
+    }
+  ],
+  "notes": "Net 30"
+}
+```
 
-### Health
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/health` | Liveness check. Returns 200 when the app is running. |
-
-### Roles
-
-There are four roles in ascending order of permissions:
-
-- **Viewer** — read-only access
-- **Member** — can create and issue invoices, record payments
-- **Admin** — all Member permissions + void invoices, register users
-- **SuperAdmin** — platform-level; not assignable via the API
-
-### Invoice Status Flow
+**Invoice status flow:**
 
 ```
 Draft ──► Issued ──► PartiallyPaid ──► Paid
-            │                           
-            └──► Overdue ──► Paid       
-                                        
-Any non-Paid status ──► Voided
+             │                │
+             └──── Overdue ───┘
+             │
+             └──► Voided  (also reachable from Draft, PartiallyPaid, Overdue)
 ```
 
-## Testing
+---
 
-### Run All Tests
+### Payments
+
+Payments go against an issued invoice. Refunds are a separate payment record with `"type": "Refund"` linked to the original via `refundedPaymentId`. The original payment record is never mutated — the ledger is append-only.
+
+```json
+POST /api/v1/invoices/{id}/payments
+Authorization: Bearer <token>
+
+{
+  "amount": 1500.00,
+  "currency": "USD",
+  "paymentMethod": "bank_transfer",
+  "externalReference": "ch_stripe_xxx",
+  "type": "Standard"
+}
+```
+
+Submitting the same `externalReference` twice returns the existing payment — idempotent by design for webhook replay safety.
+
+---
+
+### Users
+
+| Method | Route | Auth | Description |
+|---|---|---|---|
+| GET | `/api/v1/users/{id}` | Authenticated | Get user profile (tenant-scoped) |
+
+---
+
+## Authorization Roles
+
+| Role | Can do |
+|---|---|
+| Viewer | Read invoices and payments |
+| Member | Create and issue invoices, record payments |
+| Admin | Everything above + register users, void invoices |
+| SuperAdmin | Platform-level (not assignable via API) |
+
+---
+
+## Domain Design Notes
+
+**Money value object** — all amounts are `decimal` with `MidpointRounding.AwayFromZero`. Cross-currency arithmetic throws `CurrencyMismatchException` rather than silently converting.
+
+**Invoice totals are computed, not stored** — `Subtotal`, `TaxAmount`, `TotalAmount`, and `OutstandingAmount` are calculated from the JSON line items column at runtime. Only `PaidAmount` is persisted. This means historical invoices are immune to tax rate changes.
+
+**Audit trail** — every state change writes an `AuditLog` entry in the same database transaction as the data change. SQL Server triggers on Invoices, Payments, Users, and Tenants write additional entries as a safety net even for direct DB edits.
+
+**Invoice sequence** — `usp_GetNextInvoiceNumber` uses `UPDLOCK + HOLDLOCK` to generate gap-free `INV-YYYY-NNNNNN` numbers under concurrent load. A sequence number consumed by a rolled-back transaction creates a gap (intentional — no reuse).
+
+**Tenant currency in JWT** — the `tenant_currency` claim is populated from the tenant's `DefaultCurrency` at login time. Controllers can read it from `ICurrentUserService.DefaultCurrency` without a DB lookup on every request.
+
+---
+
+## Rate Limiting
+
+Three policies sit on top of JWT auth:
+
+| Policy | Applies to | Limit |
+|---|---|---|
+| `auth` | Login / register | 10 req/min per IP |
+| `api` | All other endpoints | 120 req/min per user |
+| `strict` | Sensitive mutations | 30 req/min per user |
+
+All 429 responses include a `Retry-After` header.
+
+---
+
+## Running Tests
 
 ```bash
-dotnet test
+dotnet test tests/CleanArch.UnitTests
+dotnet test tests/CleanArch.IntegrationTests
 ```
 
-### Run Only Unit Tests
+---
 
-```bash
-dotnet test tests/LedgerFlow.UnitTests
-```
+## CI/CD
 
-### Run Only Integration Tests
+GitHub Actions runs on push to `dev`, `uat`, and `main`. Tests run on all branches. Deployment to IIS runs only on `main`.
 
-```bash
-dotnet test tests/LedgerFlow.IntegrationTests
-```
+See `.github/workflows/ci-cd.yml`.
 
-Integration tests use EF Core's in-memory provider and a `WebApplicationFactory` — no SQL Server required.
+---
 
-### Test Coverage
+## Postman Collection
 
-```bash
-dotnet test --collect:"XPlat Code Coverage"
-```
+Import `ledgerflow-api.postman_collection.json` from the repo root.
 
-## CI/CD Workflow
+All variables (`baseUrl`, `tenantId`, `adminPassword`) are built into the collection — no separate environment file is needed. After import, go to the collection's **Variables** tab and set `tenantId` to the value printed by `DbSeeder` on first startup.
 
-The pipeline lives in `.github/workflows/ci-cd.yml` and runs on the `Dev` branch. It uses a **self-hosted runner** and deploys directly to Windows server paths.
+Run requests in this order for the full happy-path flow:
 
-**Three-stage pipeline:**
+1. **Auth → Login** — saves `accessToken` automatically to the collection variable
+2. **Invoices → Create Invoice** — saves `invoiceId` automatically
+3. **Invoices → Issue Invoice**
+4. **Invoices → Process Payment — Standard** — saves `paymentId` automatically
+5. **Invoices → Process Payment — Refund**
 
-```
-Dev push
-  └── DEV: build + unit tests + deploy to D:\Projects\ledgerflowApi\DEV
-        └── [QA approval gate]
-              └── UAT: build + integration tests + deploy to ...\UAT
-                    └── [PM approval gate]
-                          └── PROD: build + deploy to ...\PROD
-```
+The **Error Scenarios** folder covers 401, 403, 422, and 429 responses.
 
-Each stage requires the previous one to succeed. UAT and PROD deployments require manual approval in GitHub Environments before they run.
+---
 
-Test results are published as GitHub Checks via `dorny/test-reporter`.
+## Known Limitations
 
-## Adding a New Feature
-
-1. **Domain** — Add entity in `ledgerflowApi.Domain/Entities`, repository interface in `ledgerflowApi.Domain/Interfaces`
-2. **Application** — Add command or query in `ledgerflowApi.Application/Features/{Feature}`, with validator in the same file
-3. **Infrastructure** — Add EF config in `Persistence/Configurations`, repository in `Persistence/Repositories`, register in `InfrastructureServiceExtensions`
-4. **API** — Add controller action, map request DTO to command
-
-## Roadmap / Planned Improvements
-
-- **Refresh token storage** — refresh tokens are currently generated but not persisted; a `RefreshTokens` table and `/auth/refresh` endpoint are needed
-- **Overdue job** — a background service (Hangfire or hosted service) to call `invoice.MarkAsOverdue()` on past-due invoices nightly
-- **Email notifications** — `InvoiceIssuedEvent` and `InvoicePaidEvent` domain events are raised but have no handlers; an email delivery handler is the natural next step
-- **Tenant onboarding** — tenant creation is currently database-seeded only; a self-service signup flow with Stripe billing is planned
-- **Pagination improvement** — `ListInvoices` currently loads all matching invoices then paginates in-memory; it should push the `SKIP`/`TAKE` to the database query
-- **Currency support** — the platform supports multi-currency invoices but aggregate totals in the list endpoint assume a single currency per tenant
+- No `/auth/refresh` endpoint — refresh tokens are issued but rotation is not yet implemented
+- Integration tests are placeholder only — `WebApplicationFactory`-based tests are the next planned addition
+- `GET /users` list endpoint not yet implemented — only `GET /users/{id}` exists

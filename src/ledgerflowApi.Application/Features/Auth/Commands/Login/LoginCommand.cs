@@ -25,22 +25,15 @@ public sealed class LoginCommandValidator : AbstractValidator<LoginCommand>
         RuleFor(x => x.Email)
             .NotEmpty().WithMessage("Email is required.")
             .EmailAddress().WithMessage("Email must be a valid email address.")
-            .MaximumLength(256);
+            .MaximumLength(256).WithMessage("Email cannot exceed 256 characters.");
 
-        RuleFor(x => x.Password).NotEmpty().WithMessage("Password is required.");
+        RuleFor(x => x.Password).NotEmpty().WithMessage("Password is required.")
+            .MinimumLength(1).WithMessage("Password is required.");
     }
 }
 
 public sealed class LoginCommandHandler : IRequestHandler<LoginCommand, Result<AuthResponse>>
 {
-    private const string InvalidCredentialsMessage =
-        "The email address or password you entered is incorrect.";
-
-    // Valid BCrypt hash used for constant-time comparison when the user doesn't exist,
-    // preventing timing attacks that could enumerate valid email addresses.
-    private const string DummyHash =
-        "$2a$11$dummyhashfortimingprotectionXXXXXXXXXXXXXXXXXXXXXXXXXXX";
-
     private readonly IUserRepository _userRepository;
     private readonly ITenantRepository _tenantRepository;
     private readonly IAuditLogRepository _auditLogRepository;
@@ -48,6 +41,9 @@ public sealed class LoginCommandHandler : IRequestHandler<LoginCommand, Result<A
     private readonly ITokenService _tokenService;
     private readonly IUnitOfWork _unitOfWork;
     private readonly ILogger<LoginCommandHandler> _logger;
+
+    private const string InvalidCredentialsMessage =
+        "The email address or password you entered is incorrect.";
 
     public LoginCommandHandler(
         IUserRepository userRepository,
@@ -110,36 +106,48 @@ public sealed class LoginCommandHandler : IRequestHandler<LoginCommand, Result<A
                 "Please try again in 30 minutes, or contact your administrator.");
         }
 
-        if (!_passwordHasher.Verify(request.Password, user.PasswordHash))
+        var passwordValid = _passwordHasher.Verify(request.Password, user.PasswordHash);
+
+        if (!passwordValid)
         {
             await _unitOfWork.ExecuteInTransactionAsync(async () =>
             {
                 user.RecordFailedLogin();
                 await _userRepository.UpdateAsync(user, cancellationToken);
-                await _auditLogRepository.AddAsync(
-                    AuditLog.ForLogin(tenant.Id, user.Id, user.FullName, succeeded: false),
-                    cancellationToken);
+
+                var failureAudit = AuditLog.ForLogin(
+                    tenantId: tenant.Id,
+                    userId: user.Id,
+                    userDisplayName: user.FullName,
+                    succeeded: false);
+                await _auditLogRepository.AddAsync(failureAudit, cancellationToken);
             }, cancellationToken);
 
-            _logger.LogWarning("Failed login for user {UserId} — attempt {Attempts}",
+            _logger.LogWarning(
+                "Failed login for user {UserId} — attempt {Attempts}",
                 user.Id, user.FailedLoginAttempts);
 
             return Result<AuthResponse>.Failure(InvalidCredentialsMessage);
         }
 
-        var accessToken = _tokenService.GenerateAccessToken(user);
+        var accessToken = _tokenService.GenerateAccessToken(user, tenant.DefaultCurrency);
         var refreshToken = _tokenService.GenerateRefreshToken();
 
         await _unitOfWork.ExecuteInTransactionAsync(async () =>
         {
             user.RecordSuccessfulLogin();
             await _userRepository.UpdateAsync(user, cancellationToken);
-            await _auditLogRepository.AddAsync(
-                AuditLog.ForLogin(tenant.Id, user.Id, user.FullName, succeeded: true),
-                cancellationToken);
+
+            var successAudit = AuditLog.ForLogin(
+                tenantId: tenant.Id,
+                userId: user.Id,
+                userDisplayName: user.FullName,
+                succeeded: true);
+            await _auditLogRepository.AddAsync(successAudit, cancellationToken);
         }, cancellationToken);
 
-        _logger.LogInformation("User {UserId} ({Email}) logged in on tenant {TenantId}",
+        _logger.LogInformation(
+            "User {UserId} ({Email}) logged in successfully on tenant {TenantId}",
             user.Id, user.Email, tenant.Id);
 
         return Result<AuthResponse>.Success(new AuthResponse
@@ -158,4 +166,6 @@ public sealed class LoginCommandHandler : IRequestHandler<LoginCommand, Result<A
             }
         });
     }
+    private const string DummyHash =
+        "$2a$11$dummyhashfortimingprotectionXXXXXXXXXXXXXXXXXXXXXXXXXXX";
 }

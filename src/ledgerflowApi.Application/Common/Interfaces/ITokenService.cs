@@ -4,7 +4,7 @@ namespace ledgerflowApi.Application.Common.Interfaces;
 
 public interface ITokenService
 {
-    string GenerateAccessToken(User user);
+    string GenerateAccessToken(User user, string defaultCurrency = "USD");
     string GenerateRefreshToken();
     Guid? ValidateToken(string token);
 }

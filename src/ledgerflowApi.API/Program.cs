@@ -1,7 +1,11 @@
 using ledgerflowApi.API.Extensions;
 using ledgerflowApi.API.Middleware;
+using ledgerflowApi.API.Persistence;
+using ledgerflowApi.Application.Common.Interfaces;
 using ledgerflowApi.Application.DependencyInjection;
 using ledgerflowApi.Infrastructure.DependencyInjection;
+using ledgerflowApi.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
 using Serilog;
 
 Log.Logger = new LoggerConfiguration()
@@ -49,6 +53,17 @@ try
     builder.Services.AddHealthChecks();
 
     var app = builder.Build();
+
+    if (app.Environment.IsDevelopment())
+    {
+        using var scope = app.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var hasher = scope.ServiceProvider.GetRequiredService<IPasswordHasher>();
+        var seederLogger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+
+        await db.Database.MigrateAsync();
+        await DbSeeder.SeedAsync(db, hasher, seederLogger);
+    }
 
     app.UseMiddleware<GlobalExceptionHandlingMiddleware>();
 

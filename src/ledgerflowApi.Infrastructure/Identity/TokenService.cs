@@ -19,16 +19,18 @@ namespace ledgerflowApi.Infrastructure.Identity;
 ///   email            — user email
 ///   role             — UserRole name: "Viewer", "Member", "Admin", "SuperAdmin"
 ///   name             — "FirstName LastName"
-///   tenant_id        — tenant GUID (read by CurrentUserService per-request; avoids DB hit)
+///   tenant_id        — tenant GUID
 ///   tenant_currency  — tenant default ISO 4217 currency (e.g. "USD")
-///   jti              — unique token ID per issuance (future: revocation list)
+///   jti              — unique token ID per issuance
 ///   exp / nbf / iat  — standard time claims
 ///   iss / aud        — validated on every request by JwtBearerMiddleware
 ///
-/// Token lifetime: exactly 60 minutes (ClockSkew = 0 so expired = rejected).
-/// JwtBearerEvents adds "Token-Expired: true" header so clients know to use refresh token.
-///
-/// Key requirement: secret must be >= 32 UTF-8 bytes (256 bits) for HMAC-SHA256.
+/// FIX: GenerateAccessToken now accepts defaultCurrency as an explicit parameter.
+/// Previously it read user.Tenant?.DefaultCurrency, but the Tenant navigation
+/// property is not loaded in most handler flows — GetByEmailAsync does not
+/// include it. This caused every token to silently embed "USD" regardless of
+/// the tenant's actual configured currency. The fix passes the currency from
+/// the handler, which already has the Tenant loaded from its own DB call.
 /// </summary>
 public sealed class TokenService : ITokenService
 {
@@ -42,35 +44,30 @@ public sealed class TokenService : ITokenService
     }
 
     /// <inheritdoc/>
-    public string GenerateAccessToken(User user)
+    public string GenerateAccessToken(User user, string defaultCurrency = "USD")
     {
         var settings = GetValidatedSettings();
-        var claims   = BuildClaims(user);
-        var key      = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(settings.SecretKey));
-        var creds    = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
-        var expiry   = DateTime.UtcNow.AddMinutes(settings.ExpirationMinutes);
+        var claims = BuildClaims(user, defaultCurrency);
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(settings.SecretKey));
+        var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+        var expiry = DateTime.UtcNow.AddMinutes(settings.ExpirationMinutes);
 
         var token = new JwtSecurityToken(
-            issuer:            settings.Issuer,
-            audience:          settings.Audience,
-            claims:            claims,
-            notBefore:         DateTime.UtcNow,
-            expires:           expiry,
+            issuer: settings.Issuer,
+            audience: settings.Audience,
+            claims: claims,
+            notBefore: DateTime.UtcNow,
+            expires: expiry,
             signingCredentials: creds);
 
         _logger.LogDebug(
-            "Access token issued — user {UserId}, tenant {TenantId}, expires {Expiry:O}",
-            user.Id, user.TenantId, expiry);
+            "Access token issued — user {UserId}, tenant {TenantId}, currency {Currency}, expires {Expiry:O}",
+            user.Id, user.TenantId, defaultCurrency, expiry);
 
         return new JwtSecurityTokenHandler().WriteToken(token);
     }
 
     /// <inheritdoc/>
-    /// <remarks>
-    /// 64 cryptographically random bytes, base64-encoded.
-    /// Store a SHA-256 hash of this value in the RefreshTokens table, not the raw value —
-    /// a stolen DB dump cannot be used to forge refresh tokens.
-    /// </remarks>
     public string GenerateRefreshToken()
     {
         var bytes = new byte[64];
@@ -82,22 +79,22 @@ public sealed class TokenService : ITokenService
     /// <inheritdoc/>
     public Guid? ValidateToken(string token)
     {
-        var settings     = GetValidatedSettings();
+        var settings = GetValidatedSettings();
         var tokenHandler = new JwtSecurityTokenHandler();
-        var key          = Encoding.UTF8.GetBytes(settings.SecretKey);
+        var key = Encoding.UTF8.GetBytes(settings.SecretKey);
 
         try
         {
             tokenHandler.ValidateToken(token, new TokenValidationParameters
             {
                 ValidateIssuerSigningKey = true,
-                IssuerSigningKey        = new SymmetricSecurityKey(key),
-                ValidateIssuer          = true,
-                ValidIssuer             = settings.Issuer,
-                ValidateAudience        = true,
-                ValidAudience           = settings.Audience,
-                ValidateLifetime        = true,
-                ClockSkew               = TimeSpan.Zero // expired = rejected, no grace period
+                IssuerSigningKey = new SymmetricSecurityKey(key),
+                ValidateIssuer = true,
+                ValidIssuer = settings.Issuer,
+                ValidateAudience = true,
+                ValidAudience = settings.Audience,
+                ValidateLifetime = true,
+                ClockSkew = TimeSpan.Zero
             }, out var validated);
 
             var jwt = (JwtSecurityToken)validated;
@@ -118,22 +115,23 @@ public sealed class TokenService : ITokenService
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private static Claim[] BuildClaims(User user) =>
+    /// <summary>
+    /// Builds JWT claims. defaultCurrency is passed explicitly — do NOT read
+    /// user.Tenant?.DefaultCurrency here; the nav property may not be loaded.
+    /// </summary>
+    private static Claim[] BuildClaims(User user, string defaultCurrency) =>
     [
-        // Standard JWT registered claims
         new(JwtRegisteredClaimNames.Sub,   user.Id.ToString()),
         new(JwtRegisteredClaimNames.Email, user.Email),
         new(JwtRegisteredClaimNames.Jti,   Guid.NewGuid().ToString()),
 
-        // ASP.NET Core identity claims — what [Authorize(Roles = "Admin")] reads
         new(ClaimTypes.NameIdentifier, user.Id.ToString()),
         new(ClaimTypes.Name,           user.FullName),
         new(ClaimTypes.Email,          user.Email),
         new(ClaimTypes.Role,           user.Role.ToString()),
 
-        // Custom multi-tenant claims — read by CurrentUserService per request
         new(CurrentUserService.TenantIdClaimType,        user.TenantId.ToString()),
-        new(CurrentUserService.DefaultCurrencyClaimType, user.Tenant?.DefaultCurrency ?? "USD"),
+        new(CurrentUserService.DefaultCurrencyClaimType, defaultCurrency),
     ];
 
     private JwtSettings GetValidatedSettings()
@@ -142,12 +140,11 @@ public sealed class TokenService : ITokenService
 
         var secret = s["SecretKey"]
             ?? throw new InvalidOperationException(
-                "JwtSettings:SecretKey is not configured. " +
-                "Provide it via environment variable or user secrets — never commit it to source control.");
+                "JwtSettings:SecretKey is not configured.");
 
         if (Encoding.UTF8.GetByteCount(secret) < 32)
             throw new InvalidOperationException(
-                "JwtSettings:SecretKey must be at least 32 characters (256 bits) for HMAC-SHA256.");
+                "JwtSettings:SecretKey must be at least 32 characters for HMAC-SHA256.");
 
         var issuer = s["Issuer"]
             ?? throw new InvalidOperationException("JwtSettings:Issuer is not configured.");
@@ -165,5 +162,5 @@ public sealed class TokenService : ITokenService
         string SecretKey,
         string Issuer,
         string Audience,
-        int    ExpirationMinutes);
+        int ExpirationMinutes);
 }

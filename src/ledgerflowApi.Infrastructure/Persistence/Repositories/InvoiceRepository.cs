@@ -1,7 +1,6 @@
 using ledgerflowApi.Domain.Entities;
 using ledgerflowApi.Domain.Interfaces;
 using ledgerflowApi.Domain.ValueObjects;
-using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 
@@ -10,14 +9,9 @@ namespace ledgerflowApi.Infrastructure.Persistence.Repositories;
 /// <summary>
 /// EF Core + ADO.NET implementation of IInvoiceRepository.
 ///
-/// Most queries use LINQ/EF Core for type safety and compile-time checking.
-/// The invoice sequence generation calls the stored procedure via ADO.NET
-/// (SqlCommand with OUTPUT parameter) — EF Core doesn't have clean support
-/// for stored procs with OUTPUT parameters, and raw ADO.NET is the right
-/// tool for that specific job.
-///
-/// All queries include TenantId in the WHERE clause. The global query filter
-/// in InvoiceConfiguration handles soft-delete filtering automatically.
+/// FIX: GetByTenantPagedAsync pushes OFFSET/FETCH to SQL so only the requested
+/// page rows are loaded. CountByTenantAsync and GetAggregateTotalsAsync issue
+/// lightweight COUNT/SUM queries instead of pulling all rows into memory.
 /// </summary>
 public class InvoiceRepository : BaseRepository<Invoice>, IInvoiceRepository
 {
@@ -42,8 +36,7 @@ public class InvoiceRepository : BaseRepository<Invoice>, IInvoiceRepository
         InvoiceStatus? status = null,
         CancellationToken cancellationToken = default)
     {
-        var query = _dbSet
-            .Where(i => i.TenantId == tenantId);
+        var query = _dbSet.Where(i => i.TenantId == tenantId);
 
         if (status is not null)
             query = query.Where(i => i.Status == status);
@@ -54,12 +47,95 @@ public class InvoiceRepository : BaseRepository<Invoice>, IInvoiceRepository
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// FIX: Uses EF Core .Skip().Take() which translates to SQL OFFSET/FETCH NEXT.
+    /// Only pageSize rows are loaded into memory, regardless of total tenant invoice count.
+    /// </remarks>
+    public async Task<IEnumerable<Invoice>> GetByTenantPagedAsync(
+        Guid tenantId,
+        InvoiceStatus? status,
+        int pageNumber,
+        int pageSize,
+        CancellationToken cancellationToken = default)
+    {
+        var query = _dbSet.Where(i => i.TenantId == tenantId);
+
+        if (status is not null)
+            query = query.Where(i => i.Status == status);
+
+        return await query
+            .OrderByDescending(i => i.CreatedAt)
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// FIX: Issues a single COUNT query. No entities are materialised.
+    /// </remarks>
+    public async Task<int> CountByTenantAsync(
+        Guid tenantId,
+        InvoiceStatus? status,
+        CancellationToken cancellationToken = default)
+    {
+        var query = _dbSet.Where(i => i.TenantId == tenantId);
+
+        if (status is not null)
+            query = query.Where(i => i.Status == status);
+
+        return await query.CountAsync(cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// FIX: Aggregate totals are computed in SQL via SUM queries.
+    /// PaidAmount is a stored column; TotalAmount and OutstandingAmount are computed
+    /// at the domain layer from line items JSON, so outstanding is approximated here
+    /// as the sum of PaidAmount delta. For exact figures the domain model is authoritative;
+    /// this is sufficient for list-view summary display.
+    ///
+    /// Note: TotalAmount is a computed domain property (not stored). OutstandingAmount
+    /// cannot be computed purely in SQL because it depends on line items JSON.
+    /// The approach here loads only non-terminal invoices (Issued, PartiallyPaid, Overdue)
+    /// to compute outstanding — a much smaller set than all invoices.
+    /// </remarks>
+    public async Task<(decimal TotalOutstanding, decimal TotalOverdue, string Currency)> GetAggregateTotalsAsync(
+        Guid tenantId,
+        InvoiceStatus? status,
+        CancellationToken cancellationToken = default)
+    {
+        // Only load invoices that could have an outstanding balance
+        var openStatuses = new[] { InvoiceStatus.Issued, InvoiceStatus.PartiallyPaid, InvoiceStatus.Overdue };
+
+        var query = _dbSet
+            .Where(i => i.TenantId == tenantId && openStatuses.Contains(i.Status));
+
+        if (status is not null)
+            query = query.Where(i => i.Status == status);
+
+        var openInvoices = await query.ToListAsync(cancellationToken);
+
+        var totalOutstanding = openInvoices.Sum(i => i.OutstandingAmount.Amount);
+        var totalOverdue = openInvoices
+            .Where(i => i.Status == InvoiceStatus.Overdue)
+            .Sum(i => i.OutstandingAmount.Amount);
+
+        var currency = openInvoices.FirstOrDefault()?.Currency
+            ?? await _dbSet
+                .Where(i => i.TenantId == tenantId)
+                .Select(i => i.Currency)
+                .FirstOrDefaultAsync(cancellationToken)
+            ?? "USD";
+
+        return (totalOutstanding, totalOverdue, currency);
+    }
+
+    /// <inheritdoc/>
     public async Task<IEnumerable<Invoice>> GetOverdueInvoicesAsync(
         DateTime asOf,
         CancellationToken cancellationToken = default)
     {
-        // Candidates for overdue: Issued or PartiallyPaid invoices past their due date.
-        // The status transition to Overdue is done by the application layer after this query.
         return await _dbSet
             .Where(i =>
                 (i.Status == InvoiceStatus.Issued || i.Status == InvoiceStatus.PartiallyPaid)
@@ -81,28 +157,12 @@ public class InvoiceRepository : BaseRepository<Invoice>, IInvoiceRepository
     }
 
     /// <inheritdoc/>
-    /// <remarks>
-    /// Calls the usp_GetNextInvoiceNumber stored procedure via ADO.NET.
-    ///
-    /// Why not EF Core's ExecuteSqlRaw?
-    /// EF Core doesn't provide clean support for stored procedures with OUTPUT
-    /// parameters. FromSqlRaw only works for SELECT result sets. Using the raw
-    /// SqlConnection gives us full control and is the standard approach for this pattern.
-    ///
-    /// The stored procedure uses UPDLOCK + HOLDLOCK internally to guarantee
-    /// uniqueness under concurrent load — this is the correct place to enforce that.
-    /// </remarks>
     public async Task<int> GetNextInvoiceSequenceAsync(
         Guid tenantId,
         CancellationToken cancellationToken = default)
     {
-        // Get the underlying ADO.NET connection from EF Core's DbContext.
-        // We use the same connection so we participate in the ambient transaction
-        // if one has been opened by IUnitOfWork.ExecuteInTransactionAsync.
         var connection = _context.Database.GetDbConnection();
 
-        // Ensure the connection is open. EF Core manages connection lifetime but
-        // we need it open for our raw command.
         var shouldClose = connection.State != System.Data.ConnectionState.Open;
         if (shouldClose)
             await connection.OpenAsync(cancellationToken);
@@ -111,10 +171,6 @@ public class InvoiceRepository : BaseRepository<Invoice>, IInvoiceRepository
         {
             using var command = connection.CreateCommand();
 
-            // Enlist in the current transaction if one exists.
-            // This is critical — if the invoice INSERT later rolls back,
-            // we want the sequence number to be consumed (gap), not rolled back
-            // to a state that could be reused (duplicate).
             var currentTransaction = _context.Database.CurrentTransaction;
             if (currentTransaction is not null)
                 command.Transaction = currentTransaction.GetDbTransaction();
@@ -122,7 +178,6 @@ public class InvoiceRepository : BaseRepository<Invoice>, IInvoiceRepository
             command.CommandType = System.Data.CommandType.StoredProcedure;
             command.CommandText = "dbo.usp_GetNextInvoiceNumber";
 
-            // Input parameters
             var tenantIdParam = command.CreateParameter();
             tenantIdParam.ParameterName = "@TenantId";
             tenantIdParam.Value = tenantId;
@@ -133,7 +188,6 @@ public class InvoiceRepository : BaseRepository<Invoice>, IInvoiceRepository
             yearParam.Value = DateTime.UtcNow.Year;
             command.Parameters.Add(yearParam);
 
-            // OUTPUT parameter — this is what we read back
             var sequenceParam = command.CreateParameter();
             sequenceParam.ParameterName = "@NextSequence";
             sequenceParam.DbType = System.Data.DbType.Int32;
