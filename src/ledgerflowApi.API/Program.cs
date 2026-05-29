@@ -1,7 +1,11 @@
 using ledgerflowApi.API.Extensions;
 using ledgerflowApi.API.Middleware;
+using ledgerflowApi.API.Persistence;
+using ledgerflowApi.Application.Common.Interfaces;
 using ledgerflowApi.Application.DependencyInjection;
 using ledgerflowApi.Infrastructure.DependencyInjection;
+using ledgerflowApi.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
 using Serilog;
 
 Log.Logger = new LoggerConfiguration()
@@ -10,11 +14,10 @@ Log.Logger = new LoggerConfiguration()
 
 try
 {
-    Log.Information("Starting ledgerflowApi API");
+    Log.Information("Starting LedgerFlow API");
 
     var builder = WebApplication.CreateBuilder(args);
 
-    // ── Serilog ───────────────────────────────────────────────────────────────
     builder.Host.UseSerilog((ctx, svc, cfg) => cfg
         .ReadFrom.Configuration(ctx.Configuration)
         .ReadFrom.Services(svc)
@@ -22,22 +25,15 @@ try
         .Enrich.WithEnvironmentName()
         .Enrich.WithThreadId());
 
-    // ── MVC + Swagger ─────────────────────────────────────────────────────────
     builder.Services.AddControllers();
     builder.Services.AddEndpointsApiExplorer();
     builder.Services.AddSwaggerConfiguration();
 
-    // ── Application & Infrastructure ─────────────────────────────────────────
     builder.Services.AddApplicationServices();
     builder.Services.AddInfrastructureServices(builder.Configuration);
-
-    // ── Auth: JWT bearer + authorization policies ────────────────────────────
     builder.Services.AddJwtAuthentication(builder.Configuration);
-
-    // ── Rate limiting ─────────────────────────────────────────────────────────
     builder.Services.AddRateLimiting();
 
-    // ── CORS ──────────────────────────────────────────────────────────────────
     builder.Services.AddCors(options =>
     {
         options.AddPolicy("DefaultPolicy", policy =>
@@ -56,10 +52,19 @@ try
 
     builder.Services.AddHealthChecks();
 
-    // ─────────────────────────────────────────────────────────────────────────
     var app = builder.Build();
 
-    // ── Middleware pipeline (order matters) ───────────────────────────────────
+    if (app.Environment.IsDevelopment())
+    {
+        using var scope = app.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var hasher = scope.ServiceProvider.GetRequiredService<IPasswordHasher>();
+        var seederLogger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+
+        await db.Database.MigrateAsync();
+        await DbSeeder.SeedAsync(db, hasher, seederLogger);
+    }
+
     app.UseMiddleware<GlobalExceptionHandlingMiddleware>();
 
     app.UseSerilogRequestLogging(opts =>
@@ -68,12 +73,8 @@ try
     if (app.Environment.IsDevelopment())
         app.UseSwaggerConfiguration();
 
-    app.UseHttpsRedirection();
     app.UseCors("DefaultPolicy");
-
-    // Rate limiting before auth so rejected requests don't hit the DB
     app.UseRateLimiter();
-
     app.UseAuthentication();
     app.UseMiddleware<TenantResolutionMiddleware>();
     app.UseAuthorization();

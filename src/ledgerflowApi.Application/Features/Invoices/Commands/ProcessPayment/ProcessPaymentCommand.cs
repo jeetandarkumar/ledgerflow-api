@@ -89,7 +89,7 @@ public sealed class ProcessPaymentCommandValidator : AbstractValidator<ProcessPa
         RuleFor(x => x.InvoiceId).NotEmpty();
 
         RuleFor(x => x.Amount)
-            .GreaterThan(0).WithMessage("Payment amount must be greater than zero.")
+            .GreaterThan(0m).WithMessage("Payment amount must be greater than zero.")
             .LessThanOrEqualTo(10_000_000).WithMessage("Payment amount cannot exceed 10,000,000.");
 
         RuleFor(x => x.Currency)

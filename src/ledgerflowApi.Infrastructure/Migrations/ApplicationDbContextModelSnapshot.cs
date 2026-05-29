@@ -290,7 +290,12 @@ namespace ledgerflowApi.Infrastructure.Migrations
                     b.HasIndex("TenantId", "InvoiceId", "CreatedAt")
                         .HasDatabaseName("IX_Payments_TenantId_InvoiceId_CreatedAt");
 
-                    b.ToTable("Payments", (string)null);
+                    b.ToTable("Payments", null, t =>
+                        {
+                            t.HasTrigger("trg_Payments_AfterUpdate");
+                        });
+
+                    b.HasAnnotation("SqlServer:UseSqlOutputClause", false);
                 });
 
             modelBuilder.Entity("ledgerflowApi.Domain.Entities.Tenant", b =>
@@ -352,7 +357,12 @@ namespace ledgerflowApi.Infrastructure.Migrations
                     b.HasIndex("Status")
                         .HasDatabaseName("IX_Tenants_Status");
 
-                    b.ToTable("Tenants", (string)null);
+                    b.ToTable("Tenants", null, t =>
+                        {
+                            t.HasTrigger("trg_Tenants_AfterUpdate");
+                        });
+
+                    b.HasAnnotation("SqlServer:UseSqlOutputClause", false);
                 });
 
             modelBuilder.Entity("ledgerflowApi.Domain.Entities.User", b =>
@@ -400,8 +410,8 @@ namespace ledgerflowApi.Infrastructure.Migrations
 
                     b.Property<string>("PasswordHash")
                         .IsRequired()
-                        .HasMaxLength(60)
-                        .HasColumnType("nvarchar(60)");
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
 
                     b.Property<string>("Role")
                         .IsRequired()

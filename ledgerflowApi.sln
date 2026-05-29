@@ -2,10 +2,6 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ledgerflowApi.UnitTests", "tests\CleanArch.UnitTests\ledgerflowApi.UnitTests.csproj", "{A1B2C3D4-0005-0000-0000-000000000005}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ledgerflowApi.IntegrationTests", "tests\CleanArch.IntegrationTests\ledgerflowApi.IntegrationTests.csproj", "{A1B2C3D4-0006-0000-0000-000000000006}"
-EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ledgerflowApi.API", "src\ledgerflowApi.API\ledgerflowApi.API.csproj", "{344CD0FF-ABEE-1491-5422-0B23581BF8B8}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ledgerflowApi.Application", "src\ledgerflowApi.Application\ledgerflowApi.Application.csproj", "{6AE642B8-6F56-4CA9-CCFC-511AFC5E5735}"
@@ -14,20 +10,16 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ledgerflowApi.Domain", "src
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ledgerflowApi.Infrastructure", "src\ledgerflowApi.Infrastructure\ledgerflowApi.Infrastructure.csproj", "{B2E01264-BDC4-51B3-2CC9-7B8B9CEAEB1E}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LedgerFlow.IntegrationTests", "tests\LedgerFlow.IntegrationTests\LedgerFlow.IntegrationTests.csproj", "{7410A7A9-CE3C-A707-01DD-0204BAD2F9E4}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LedgerFlow.UnitTests", "tests\LedgerFlow.UnitTests\LedgerFlow.UnitTests.csproj", "{46D5B20E-114E-8775-F248-0FAC0C098700}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
 		Release|Any CPU = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{A1B2C3D4-0005-0000-0000-000000000005}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{A1B2C3D4-0005-0000-0000-000000000005}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{A1B2C3D4-0005-0000-0000-000000000005}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{A1B2C3D4-0005-0000-0000-000000000005}.Release|Any CPU.Build.0 = Release|Any CPU
-		{A1B2C3D4-0006-0000-0000-000000000006}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{A1B2C3D4-0006-0000-0000-000000000006}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{A1B2C3D4-0006-0000-0000-000000000006}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{A1B2C3D4-0006-0000-0000-000000000006}.Release|Any CPU.Build.0 = Release|Any CPU
 		{344CD0FF-ABEE-1491-5422-0B23581BF8B8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{344CD0FF-ABEE-1491-5422-0B23581BF8B8}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{344CD0FF-ABEE-1491-5422-0B23581BF8B8}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -44,6 +36,14 @@ Global
 		{B2E01264-BDC4-51B3-2CC9-7B8B9CEAEB1E}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{B2E01264-BDC4-51B3-2CC9-7B8B9CEAEB1E}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{B2E01264-BDC4-51B3-2CC9-7B8B9CEAEB1E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7410A7A9-CE3C-A707-01DD-0204BAD2F9E4}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7410A7A9-CE3C-A707-01DD-0204BAD2F9E4}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7410A7A9-CE3C-A707-01DD-0204BAD2F9E4}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7410A7A9-CE3C-A707-01DD-0204BAD2F9E4}.Release|Any CPU.Build.0 = Release|Any CPU
+		{46D5B20E-114E-8775-F248-0FAC0C098700}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{46D5B20E-114E-8775-F248-0FAC0C098700}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{46D5B20E-114E-8775-F248-0FAC0C098700}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{46D5B20E-114E-8775-F248-0FAC0C098700}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

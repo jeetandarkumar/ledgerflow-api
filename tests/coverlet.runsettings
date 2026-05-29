@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RunSettings>
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <DataCollector friendlyName="XPlat Code Coverage">
+        <Configuration>
+
+          <Format>cobertura</Format>
+
+          <!-- exclude test projects -->
+          <Exclude>[LedgerFlow.UnitTests*]*,[LedgerFlow.IntegrationTests*]*</Exclude>
+
+          <!-- IMPORTANT: single line format -->
+          <ExcludeByFile>**/Migrations/**;**/Program.cs;**/obj/**</ExcludeByFile>
+
+          <ExcludeByAttribute>
+            GeneratedCodeAttribute;
+            CompilerGeneratedAttribute;
+            ExcludeFromCodeCoverageAttribute
+          </ExcludeByAttribute>
+
+          <!-- optional: remove Include entirely (recommended for CI stability) -->
+          
+          <Threshold>70</Threshold>
+          <ThresholdType>line</ThresholdType>
+          <ThresholdStat>Total</ThresholdStat>
+
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+</RunSettings>

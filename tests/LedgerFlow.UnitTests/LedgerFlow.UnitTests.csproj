@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <!-- Emit test results in a format GitHub Actions can read -->
+    <GenerateTestExecutionRecords>true</GenerateTestExecutionRecords>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Test framework -->
+    <PackageReference Include="xunit" Version="2.9.0" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+
+    <!-- Mocking -->
+    <PackageReference Include="Moq" Version="4.20.72" />
+
+    <!-- Assertions -->
+    <PackageReference Include="FluentAssertions" Version="6.12.1" />
+
+    <!-- Test coverage -->
+    <PackageReference Include="coverlet.collector" Version="6.0.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+
+    <!-- Microsoft logging abstractions needed by handlers under test -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Reference the projects under test — no InternalsVisibleTo needed because we
+         only test through public surface, but add it if you want to test internal helpers -->
+    <ProjectReference Include="..\..\src\ledgerflowApi.Domain\ledgerflowApi.Domain.csproj" />
+    <ProjectReference Include="..\..\src\ledgerflowApi.Application\ledgerflowApi.Application.csproj" />
+    <ProjectReference Include="..\..\src\ledgerflowApi.Infrastructure\ledgerflowApi.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -26,7 +26,7 @@ public class GlobalExceptionHandlingMiddleware
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "An unhandled exception occurred. TraceId: {TraceId}", context.TraceIdentifier);
+            _logger.LogError(ex, "Unhandled exception. TraceId: {TraceId}", context.TraceIdentifier);
             await HandleExceptionAsync(context, ex);
         }
     }
@@ -61,28 +61,19 @@ public class GlobalExceptionHandlingMiddleware
                 new Dictionary<string, string[]> { ["detail"] = ["Please try again later or contact support."] } as object)
         };
 
-        var response = new ProblemDetailsResponse
+        var response = new
         {
-            Type = $"https://httpstatuses.io/{(int)statusCode}",
-            Title = title,
-            Status = (int)statusCode,
-            TraceId = context.TraceIdentifier,
-            Errors = errors
+            type = $"https://httpstatuses.io/{(int)statusCode}",
+            title,
+            status = (int)statusCode,
+            traceId = context.TraceIdentifier,
+            errors
         };
 
         context.Response.ContentType = "application/problem+json";
         context.Response.StatusCode = (int)statusCode;
 
-        var options = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
-        await context.Response.WriteAsync(JsonSerializer.Serialize(response, options));
+        await context.Response.WriteAsync(JsonSerializer.Serialize(response,
+            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
     }
-}
-
-public class ProblemDetailsResponse
-{
-    public string? Type { get; init; }
-    public string? Title { get; init; }
-    public int Status { get; init; }
-    public string? TraceId { get; init; }
-    public object? Errors { get; init; }
 }

@@ -10,8 +10,7 @@ namespace ledgerflowApi.Application.Features.Invoices.Queries.ListInvoices;
 // ── Query ─────────────────────────────────────────────────────────────────────
 
 /// <summary>
-/// Returns a paginated list of invoices for the caller's tenant,
-/// with optional filtering by status and date range.
+/// Returns a paginated list of invoices for the caller's tenant with optional status filter.
 /// </summary>
 public sealed record ListInvoicesQuery(
     Guid TenantId,
@@ -32,7 +31,6 @@ public sealed class ListInvoicesResponse
     public bool HasPreviousPage { get; init; }
     public bool HasNextPage { get; init; }
 
-    // Aggregate totals for the current filter (not just the current page)
     public decimal TotalOutstanding { get; init; }
     public decimal TotalOverdue { get; init; }
     public string Currency { get; init; } = string.Empty;
@@ -83,6 +81,18 @@ public sealed class ListInvoicesQueryValidator : AbstractValidator<ListInvoicesQ
 
 // ── Handler ───────────────────────────────────────────────────────────────────
 
+/// <summary>
+/// FIX: Pagination is now pushed to the database via the repository instead of
+/// loading all invoices into memory first.
+///
+/// Previous behaviour: GetByTenantAsync returned ALL invoices, then the handler
+/// called .Skip().Take() on the in-memory list. For a tenant with 10,000 invoices
+/// this loaded every row into the process to return 20.
+///
+/// New behaviour: GetByTenantAsync accepts pageNumber/pageSize and emits a single
+/// SQL query with OFFSET/FETCH. A separate count query feeds the pagination metadata
+/// and the aggregate totals query (outstanding/overdue) is also a single SUM query.
+/// </summary>
 public sealed class ListInvoicesQueryHandler : IRequestHandler<ListInvoicesQuery, Result<ListInvoicesResponse>>
 {
     private readonly IInvoiceRepository _invoiceRepository;
@@ -96,38 +106,25 @@ public sealed class ListInvoicesQueryHandler : IRequestHandler<ListInvoicesQuery
         ListInvoicesQuery request,
         CancellationToken cancellationToken)
     {
-        // Parse optional status filter
         InvoiceStatus? statusFilter = request.Status is not null
             ? InvoiceStatus.From(request.Status)
             : null;
 
-        // Load all invoices matching the filter (tenant-scoped in repo)
-        var all = (await _invoiceRepository.GetByTenantAsync(
+        // DB-level count and aggregate totals — no full load
+        var totalCount = await _invoiceRepository.CountByTenantAsync(
+            request.TenantId, statusFilter, cancellationToken);
+
+        var (totalOutstanding, totalOverdue, currency) =
+            await _invoiceRepository.GetAggregateTotalsAsync(
+                request.TenantId, statusFilter, cancellationToken);
+
+        // DB-level paged query — only the requested page is loaded
+        var paged = (await _invoiceRepository.GetByTenantPagedAsync(
             request.TenantId,
             statusFilter,
+            request.PageNumber,
+            request.PageSize,
             cancellationToken)).ToList();
-
-        var totalCount = all.Count;
-
-        // Compute aggregate totals across the full filtered set (not just the page)
-        var totalOutstanding = all
-            .Where(i => !i.Status.IsPaid && !i.Status.IsVoided)
-            .Sum(i => i.OutstandingAmount.Amount);
-
-        var totalOverdue = all
-            .Where(i => i.Status == InvoiceStatus.Overdue)
-            .Sum(i => i.OutstandingAmount.Amount);
-
-        // The currency for the totals — use the first invoice's currency.
-        // In a production system with multi-currency tenants this would need
-        // separate aggregation per currency; for now tenants have one default.
-        var currency = all.FirstOrDefault()?.Currency ?? "USD";
-
-        // Apply pagination
-        var paged = all
-            .Skip((request.PageNumber - 1) * request.PageSize)
-            .Take(request.PageSize)
-            .ToList();
 
         var totalPages = (int)Math.Ceiling(totalCount / (double)request.PageSize);
 

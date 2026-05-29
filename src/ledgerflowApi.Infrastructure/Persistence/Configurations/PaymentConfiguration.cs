@@ -113,5 +113,6 @@ public class PaymentConfiguration : IEntityTypeConfiguration<Payment>
         builder.HasIndex(p => p.RefundedPaymentId)
             .HasFilter("[RefundedPaymentId] IS NOT NULL")
             .HasDatabaseName("IX_Payments_RefundedPaymentId");
+        builder.ToTable("Payments", tb => tb.HasTrigger("trg_Payments_AfterUpdate"));
     }
 }

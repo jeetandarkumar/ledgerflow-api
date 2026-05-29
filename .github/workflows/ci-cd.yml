@@ -1,48 +1,133 @@
-name: CI-CD Pipeline
+name: LedgerFlow CI/CD
 
 on:
   push:
-    branches:
-      - dev
-      - uat
-      - main
+    branches: [Dev]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  checks: write
+  actions: read
 
 jobs:
 
-  build-test:
+  ##############################################################################
+  # STEP 1 — DEV (Auto on Dev push)
+  ##############################################################################
+  dev:
+    name: DEV - Unit Tests + Deploy
     runs-on: self-hosted
+    environment: DEV
 
     steps:
-      - uses: actions/checkout@v3
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v3
-        with:
-          dotnet-version: '8.0.x'
+      - uses: actions/checkout@v4
 
       - name: Restore
-        run: dotnet restore
+        run: dotnet restore ledgerflowApi.sln
 
       - name: Build
-        run: dotnet build --no-restore
+        run: dotnet build ledgerflowApi.sln -c Release
 
       - name: Run Unit Tests
-        run: dotnet test tests/UnitTests
+        run: |
+          dotnet test tests/LedgerFlow.UnitTests/LedgerFlow.UnitTests.csproj `
+            --configuration Release `
+            --no-build `
+            --logger "trx;LogFileName=unit.trx" `
+            --results-directory ./test-results `
+            --collect:"XPlat Code Coverage" `
+            --settings tests/coverlet.runsettings
+        shell: powershell
 
-      - name: Run Integration Tests
-        run: dotnet test tests/IntegrationTests
-        
-  deploy:
-    needs: build-test
-    if: github.ref == 'refs/heads/main'
+      - name: Publish Unit Test Results
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: Unit Tests
+          path: "test-results/*.trx"
+          reporter: dotnet-trx
+
+      - name: Deploy DEV
+        shell: powershell
+        run: |
+          dotnet publish src/ledgerflowApi.API/ledgerflowApi.API.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained false `
+            -o "D:\Projects\ledgerflowApi\DEV"
+
+  ##############################################################################
+  # STEP 2 — UAT (Waits for DEV, then QA approval gate fires)
+  ##############################################################################
+  uat:
+    name: UAT - Integration Tests + Deploy
     runs-on: self-hosted
+    needs: dev                  # Won't start until DEV succeeds
+    environment: UAT            # GitHub will pause here and ask for approval
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - name: Publish
-        run: dotnet publish WebAPI/WebAPI.csproj -c Release -o publish
+      - name: Restore
+        run: dotnet restore ledgerflowApi.sln
 
-      - name: Deploy to IIS
+      - name: Build
+        run: dotnet build ledgerflowApi.sln -c Release
+
+      - name: Run Integration Tests
         run: |
-          xcopy /y /s publish\* "C:\inetpub\wwwroot\MyApi\"
+          dotnet test tests/LedgerFlow.IntegrationTests/LedgerFlow.IntegrationTests.csproj `
+            --configuration Release `
+            --no-build `
+            --logger "trx;LogFileName=int.trx" `
+            --results-directory ./test-results `
+            --settings tests/coverlet.runsettings
+        shell: powershell
+
+      - name: Publish Integration Results
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: Integration Tests
+          path: "test-results/*.trx"
+          reporter: dotnet-trx
+
+      - name: Deploy UAT
+        shell: powershell
+        run: |
+          dotnet publish src/ledgerflowApi.API/ledgerflowApi.API.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained false `
+            -o "D:\Projects\ledgerflowApi\UAT"
+
+  ##############################################################################
+  # STEP 3 — PROD (Waits for UAT, then PM approval gate fires)
+  ##############################################################################
+  prod:
+    name: PROD - Deploy
+    runs-on: self-hosted
+    needs: uat                  # Won't start until UAT succeeds
+    environment: PROD           # GitHub will pause here and ask for approval
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore
+        run: dotnet restore ledgerflowApi.sln
+
+      - name: Build
+        run: dotnet build ledgerflowApi.sln -c Release
+
+      - name: Deploy PROD
+        shell: powershell
+        run: |
+          dotnet publish src/ledgerflowApi.API/ledgerflowApi.API.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained false `
+            -o "D:\Projects\ledgerflowApi\PROD"

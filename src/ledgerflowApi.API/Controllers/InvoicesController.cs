@@ -12,10 +12,7 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace ledgerflowApi.API.Controllers;
 
-/// <summary>
-/// Invoice lifecycle: create, issue, void, list, get, and record payments.
-/// All routes are tenant-scoped via the JWT.
-/// </summary>
+/// <summary>Invoice lifecycle: create, issue, void, list, get, and record payments.</summary>
 [Authorize]
 public class InvoicesController : BaseApiController
 {
@@ -29,18 +26,18 @@ public class InvoicesController : BaseApiController
     /// <summary>Returns a paginated list of invoices for the authenticated tenant.</summary>
     [HttpGet]
     [ProducesResponseType(typeof(ListInvoicesResponse), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status422UnprocessableEntity)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> ListInvoices(
         [FromQuery] string? status,
         [FromQuery] int pageNumber = 1,
         [FromQuery] int pageSize = 20,
         CancellationToken cancellationToken = default)
     {
-        var tenantId = _currentUser.TenantId;
-        if (tenantId is null) return Unauthorized();
+        if (_currentUser.TenantId is not { } tenantId)
+            return Unauthorized();
 
         var result = await Mediator.Send(
-            new ListInvoicesQuery(tenantId.Value, status, pageNumber, pageSize),
+            new ListInvoicesQuery(tenantId, status, pageNumber, pageSize),
             cancellationToken);
 
         return result.Succeeded ? Ok(result.Data) : BadRequest(result.Errors);
@@ -52,10 +49,10 @@ public class InvoicesController : BaseApiController
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetInvoice(Guid id, CancellationToken cancellationToken)
     {
-        var tenantId = _currentUser.TenantId;
-        if (tenantId is null) return Unauthorized();
+        if (_currentUser.TenantId is not { } tenantId)
+            return Unauthorized();
 
-        var result = await Mediator.Send(new GetInvoiceQuery(id, tenantId.Value), cancellationToken);
+        var result = await Mediator.Send(new GetInvoiceQuery(id, tenantId), cancellationToken);
 
         if (!result.Succeeded)
             return NotFound(new ProblemDetails
@@ -78,11 +75,11 @@ public class InvoicesController : BaseApiController
         [FromBody] CreateInvoiceRequest request,
         CancellationToken cancellationToken)
     {
-        var tenantId = _currentUser.TenantId;
-        if (tenantId is null) return Unauthorized();
+        if (_currentUser.TenantId is not { } tenantId)
+            return Unauthorized();
 
         var command = new CreateInvoiceCommand(
-            TenantId: tenantId.Value,
+            TenantId: tenantId,
             CustomerName: request.CustomerName,
             CustomerEmail: request.CustomerEmail,
             Currency: ResolveCurrency(request.Currency),
@@ -121,14 +118,13 @@ public class InvoicesController : BaseApiController
         [FromBody] IssueInvoiceRequest request,
         CancellationToken cancellationToken)
     {
-        var tenantId = _currentUser.TenantId;
-        var userId = _currentUser.UserId;
-        if (tenantId is null || userId is null) return Unauthorized();
+        if (_currentUser.TenantId is not { } tenantId || _currentUser.UserId is not { } userId)
+            return Unauthorized();
 
         var command = new IssueInvoiceCommand(
             InvoiceId: id,
-            TenantId: tenantId.Value,
-            IssuedByUserId: userId.Value,
+            TenantId: tenantId,
+            IssuedByUserId: userId,
             IssuedByUserName: _currentUser.UserName ?? "Unknown",
             DueDate: request.DueDate,
             BillingAddress: request.BillingAddress is { } addr
@@ -159,14 +155,13 @@ public class InvoicesController : BaseApiController
         [FromBody] VoidInvoiceRequest request,
         CancellationToken cancellationToken)
     {
-        var tenantId = _currentUser.TenantId;
-        var userId = _currentUser.UserId;
-        if (tenantId is null || userId is null) return Unauthorized();
+        if (_currentUser.TenantId is not { } tenantId || _currentUser.UserId is not { } userId)
+            return Unauthorized();
 
         var command = new VoidInvoiceCommand(
             InvoiceId: id,
-            TenantId: tenantId.Value,
-            VoidedByUserId: userId.Value,
+            TenantId: tenantId,
+            VoidedByUserId: userId,
             VoidedByUserName: _currentUser.UserName ?? "Unknown",
             Reason: request.Reason);
 
@@ -193,11 +188,11 @@ public class InvoicesController : BaseApiController
         [FromBody] ProcessPaymentRequest request,
         CancellationToken cancellationToken)
     {
-        var tenantId = _currentUser.TenantId;
-        if (tenantId is null) return Unauthorized();
+        if (_currentUser.TenantId is not { } tenantId)
+            return Unauthorized();
 
         var command = new ProcessPaymentCommand(
-            TenantId: tenantId.Value,
+            TenantId: tenantId,
             InvoiceId: id,
             Amount: request.Amount,
             Currency: request.Currency,
