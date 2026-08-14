@@ -63,7 +63,7 @@ public class LedgerFlowWebApplicationFactory : WebApplicationFactory<Program>
                 ["JwtSettings:Issuer"] = "ledgerflow-test",
                 ["JwtSettings:Audience"] = "ledgerflow-api-test",
                 ["JwtSettings:ExpirationMinutes"] = "60",
-                ["ConnectionStrings:DefaultConnection"] = "Server=DESKTOP-72ACC7O;Database=ledgerflowApiDb;Trusted_Connection=True;TrustServerCertificate=True;"
+                ["ConnectionStrings:DefaultConnection"] = "Server=Devil-VM;Database=ledgerflowApiDb;Trusted_Connection=True;TrustServerCertificate=True;"
             });
         });
     }
@@ -149,5 +149,5 @@ public abstract class IntegrationTestBase : IAsyncLifetime
         await Factory.DisposeAsync();
     }
 
-    private sealed record AuthTokenResponse(string AccessToken, string RefreshToken);
+    private sealed record AuthTokenResponse(string AccessToken);
 }

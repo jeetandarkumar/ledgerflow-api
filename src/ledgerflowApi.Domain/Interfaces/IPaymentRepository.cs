@@ -4,7 +4,11 @@ namespace ledgerflowApi.Domain.Interfaces;
 
 /// <summary>
 /// Repository contract for Payment records.
-/// Payments are append-only — no update or delete operations are exposed.
+/// Payments are append-only in the sense that Amount, Currency, and Type never change after
+/// creation. The one deliberate exception is RefundedAmount: processing a refund updates the
+/// *original* payment's running refunded total (and bumps its RowVersion) via UpdateAsync, so
+/// that "how much of this payment remains refundable" is enforced by the aggregate itself
+/// rather than recomputed by summing sibling rows on every request. See Payment.ApplyRefund.
 /// </summary>
 public interface IPaymentRepository : IRepository<Payment>
 {

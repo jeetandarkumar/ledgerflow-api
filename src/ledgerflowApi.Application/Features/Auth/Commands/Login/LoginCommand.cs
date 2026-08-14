@@ -131,7 +131,6 @@ public sealed class LoginCommandHandler : IRequestHandler<LoginCommand, Result<A
         }
 
         var accessToken = _tokenService.GenerateAccessToken(user, tenant.DefaultCurrency);
-        var refreshToken = _tokenService.GenerateRefreshToken();
 
         await _unitOfWork.ExecuteInTransactionAsync(async () =>
         {
@@ -153,7 +152,6 @@ public sealed class LoginCommandHandler : IRequestHandler<LoginCommand, Result<A
         return Result<AuthResponse>.Success(new AuthResponse
         {
             AccessToken = accessToken,
-            RefreshToken = refreshToken,
             ExpiresAt = DateTime.UtcNow.AddMinutes(60),
             User = new UserAuthInfo
             {

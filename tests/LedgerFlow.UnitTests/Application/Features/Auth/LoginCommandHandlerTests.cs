@@ -74,7 +74,6 @@ public class LoginCommandHandlerTests
             .ReturnsAsync(user);
         _hasher.Setup(h => h.Verify(command.Password, user.PasswordHash)).Returns(true);
         _tokenService.Setup(t => t.GenerateAccessToken(user, "USD")).Returns("access-token");
-        _tokenService.Setup(t => t.GenerateRefreshToken()).Returns("refresh-token");
         _unitOfWork.Setup(u => u.ExecuteInTransactionAsync(It.IsAny<Func<Task>>(), It.IsAny<CancellationToken>()))
             .Callback<Func<Task>, CancellationToken>((fn, _) => fn().GetAwaiter().GetResult());
 
@@ -86,7 +85,6 @@ public class LoginCommandHandlerTests
         // Assert
         result.Succeeded.Should().BeTrue();
         result.Data!.AccessToken.Should().Be("access-token");
-        result.Data!.RefreshToken.Should().Be("refresh-token");
         result.Data!.User.Email.Should().Be(user.Email);
     }
 

@@ -143,7 +143,6 @@ public sealed class RegisterUserCommandHandler : IRequestHandler<RegisterUserCom
         return Result<AuthResponse>.Success(new AuthResponse
         {
             AccessToken = _tokenService.GenerateAccessToken(user),
-            RefreshToken = _tokenService.GenerateRefreshToken(),
             ExpiresAt = DateTime.UtcNow.AddMinutes(60),
             User = new UserAuthInfo
             {

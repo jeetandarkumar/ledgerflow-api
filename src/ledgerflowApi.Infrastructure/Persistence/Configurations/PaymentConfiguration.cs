@@ -55,6 +55,32 @@ public class PaymentConfiguration : IEntityTypeConfiguration<Payment>
                 .IsFixedLength()
                 .IsRequired();
         });
+
+        // ── RefundedAmount (owned Money → two columns) ──────────────────────────
+        // Running total of refunds already applied against this payment. See the
+        // property's doc comment on Payment for why this lives on the payment itself
+        // rather than being computed by summing child refund rows on every read.
+        builder.OwnsOne(p => p.RefundedAmount, money =>
+        {
+            money.Property(m => m.Amount)
+                .HasColumnName("RefundedAmount")
+                .HasPrecision(18, 4)
+                .IsRequired();
+            money.Property(m => m.Currency)
+                .HasColumnName("RefundedAmountCurrency")
+                .HasMaxLength(3)
+                .IsFixedLength()
+                .IsRequired();
+        });
+
+        // ── RowVersion (optimistic concurrency token) ───────────────────────────
+        // SQL Server ROWVERSION column. Guards ApplyRefund() against two concurrent
+        // refunds racing against the same original payment — see the property's doc
+        // comment for the full explanation.
+        builder.Property(p => p.RowVersion)
+            .HasColumnName("RowVersion")
+            .IsRowVersion();
+
         builder.HasQueryFilter(p => !p.Invoice.IsDeleted);
         // ── Status (value object → string conversion) ─────────────────────────
         builder.Property(p => p.Status)

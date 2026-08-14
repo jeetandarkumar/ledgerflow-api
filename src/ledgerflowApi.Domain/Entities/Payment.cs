@@ -56,6 +56,34 @@ public class Payment : TenantEntity
     /// </summary>
     public Money Amount { get; private set; } = null!;
 
+    /// <summary>
+    /// For Standard payments only: the running total of all refunds applied against this
+    /// payment so far. Starts at zero and is incremented by <see cref="ApplyRefund"/> — never
+    /// decremented, since a refund, once completed, is a permanent fact.
+    ///
+    /// This is the source of truth for "how much of this payment is still refundable",
+    /// rather than deriving it by summing child refund rows on every request. Tracking it
+    /// here, on the original payment itself, is also what makes the row-version concurrency
+    /// check below effective: two refunds racing against the same original payment both
+    /// have to update this same row, so the database — not application code — decides which
+    /// one commits first.
+    /// </summary>
+    public Money RefundedAmount { get; private set; } = null!;
+
+    /// <summary>
+    /// EF Core concurrency token (SQL Server ROWVERSION). Automatically changed by the
+    /// database on every UPDATE to this row.
+    ///
+    /// This is what makes <see cref="ApplyRefund"/> safe under concurrency: if two refund
+    /// requests are processed against the same original payment at the same time, both read
+    /// the same starting RowVersion, but only the first one to commit its UPDATE succeeds —
+    /// the second one's UPDATE targets a RowVersion that no longer matches, EF Core raises
+    /// DbUpdateConcurrencyException, and the transaction is rolled back. The caller (see
+    /// ProcessPaymentCommandHandler) turns that into a "try again" response rather than
+    /// silently applying both refunds.
+    /// </summary>
+    public byte[] RowVersion { get; private set; } = [];
+
     // ── Metadata ──────────────────────────────────────────────────────────────
 
     public PaymentStatus Status { get; private set; } = PaymentStatus.Pending;
@@ -120,6 +148,7 @@ public class Payment : TenantEntity
             TenantId = tenantId,
             InvoiceId = invoiceId,
             Amount = amount,
+            RefundedAmount = new Money(0m, amount.Currency),
             PaymentMethod = paymentMethod.Trim(),
             ExternalReference = externalReference?.Trim(),
             Notes = notes?.Trim(),
@@ -154,6 +183,7 @@ public class Payment : TenantEntity
             InvoiceId = invoiceId,
             RefundedPaymentId = originalPaymentId,
             Amount = refundAmount,
+            RefundedAmount = new Money(0m, refundAmount.Currency),
             PaymentMethod = paymentMethod.Trim(),
             Notes = notes?.Trim(),
             InitiatedByUserId = initiatedByUserId,
@@ -194,6 +224,48 @@ public class Payment : TenantEntity
         else if (evt is PaymentRefundedEvent refundedEvt)
             AddDomainEvent(refundedEvt);
     }
+
+    /// <summary>
+    /// Applies a refund against this (Standard) payment, incrementing <see cref="RefundedAmount"/>.
+    ///
+    /// Business rule: total refunds against a single payment can never exceed the original
+    /// payment amount. This is enforced here, inside the aggregate, rather than by summing
+    /// sibling refund rows in application code each time — so the rule holds no matter which
+    /// caller processes a refund, and holds under concurrency via the RowVersion token (see
+    /// its doc comment): two refunds racing against the same payment both mutate this same
+    /// row, so only one can win the database's optimistic-concurrency check.
+    ///
+    /// Only a Standard, Completed payment can be refunded — refunding a refund would make the
+    /// ledger ambiguous, so Type is checked alongside Status.
+    /// </summary>
+    public void ApplyRefund(Money refundAmount)
+    {
+        if (Type != PaymentType.Standard)
+            throw new DomainException(
+                "Only a Standard payment can be refunded — a refund cannot itself be refunded.");
+
+        if (!Status.IsCompleted)
+            throw new DomainException(
+                $"Only Completed payments can be refunded. Current status: {Status.Value}.");
+
+        if (refundAmount.Currency != Amount.Currency)
+            throw new DomainException(
+                $"Refund currency ({refundAmount.Currency}) does not match the original " +
+                $"payment currency ({Amount.Currency}).");
+
+        var totalAfterRefund = RefundedAmount.Add(refundAmount);
+
+        if (totalAfterRefund.IsGreaterThan(Amount))
+            throw new DomainException(
+                $"Cannot refund {refundAmount} — only {RemainingRefundableAmount} of this " +
+                $"{Amount} payment remains refundable ({RefundedAmount} already refunded).");
+
+        RefundedAmount = totalAfterRefund;
+        SetUpdatedAt();
+    }
+
+    /// <summary>The portion of this payment that has not yet been refunded.</summary>
+    public Money RemainingRefundableAmount => Amount.Subtract(RefundedAmount);
 
     /// <summary>
     /// Marks the payment as failed.

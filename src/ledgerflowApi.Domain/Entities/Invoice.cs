@@ -408,11 +408,29 @@ public class Invoice : TenantEntity
             (acc, li) => acc.Add(li.NetAmount))
         : Money.Of(0m, Currency);
 
-    /// <summary>The monetary value of the invoice-level discount.</summary>
-    public Money InvoiceDiscountAmount => Subtotal.Multiply(DiscountPercentage / 100m);
+    /// <summary>
+    /// Subtotal after the invoice-level discount is applied.
+    ///
+    /// Computed directly from Subtotal at full decimal precision and rounded once here —
+    /// this is the source of truth for the discounted subtotal. Tax is calculated from this
+    /// value (see <see cref="TaxAmount"/>).
+    /// </summary>
+    public Money DiscountedSubtotal
+    {
+        get
+        {
+            var fullPrecisionDiscounted = Subtotal.Amount * (1m - DiscountPercentage / 100m);
+            return new Money(fullPrecisionDiscounted, Subtotal.Currency);
+        }
+    }
 
-    /// <summary>Subtotal after the invoice-level discount is applied.</summary>
-    public Money DiscountedSubtotal => Subtotal.ApplyDiscount(DiscountPercentage);
+    /// <summary>
+    /// The monetary value of the invoice-level discount.
+    ///
+    /// Derived as Subtotal − DiscountedSubtotal rather than computed independently, so the
+    /// printed figures always reconcile exactly (Subtotal = Discount + DiscountedSubtotal).
+    /// </summary>
+    public Money InvoiceDiscountAmount => Subtotal.Subtract(DiscountedSubtotal);
 
     /// <summary>
     /// Tax amount. Calculated from the discounted subtotal so discounts

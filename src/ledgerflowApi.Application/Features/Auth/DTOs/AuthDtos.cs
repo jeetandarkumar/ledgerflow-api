@@ -32,13 +32,18 @@ public sealed class RegisterUserRequest
 
 /// <summary>
 /// Returned after a successful login or registration.
-/// The access token is a signed JWT; the refresh token is an opaque random string.
-/// Clients should store both securely (httpOnly cookie or secure storage — never localStorage).
+/// The access token is a signed JWT. Clients should store it securely
+/// (httpOnly cookie or secure storage — never localStorage).
+///
+/// There is deliberately no refresh token here: a previous version of this API issued one,
+/// but nothing ever persisted or validated it server-side, so it was a token in the contract
+/// that could never actually be redeemed. Removed until refresh-token persistence, rotation,
+/// and a /auth/refresh endpoint are implemented together — see ITokenService.GenerateRefreshToken,
+/// which still exists and is unit-tested, ready for that work.
 /// </summary>
 public sealed class AuthResponse
 {
     public string AccessToken { get; init; } = string.Empty;
-    public string RefreshToken { get; init; } = string.Empty;
     public DateTime ExpiresAt { get; init; }
     public UserAuthInfo User { get; init; } = null!;
 }

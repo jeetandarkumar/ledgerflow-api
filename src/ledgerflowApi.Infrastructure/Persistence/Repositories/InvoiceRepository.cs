@@ -58,7 +58,11 @@ public class InvoiceRepository : BaseRepository<Invoice>, IInvoiceRepository
         int pageSize,
         CancellationToken cancellationToken = default)
     {
-        var query = _dbSet.Where(i => i.TenantId == tenantId);
+        // AsNoTracking: this feeds ListInvoicesQuery only, which returns a read-only summary
+        // DTO and never mutates or saves these entities. Skipping EF Core's change tracking
+        // for a page of results avoids snapshotting entities that are thrown away immediately
+        // after mapping to InvoiceSummary.
+        var query = _dbSet.AsNoTracking().Where(i => i.TenantId == tenantId);
 
         if (status is not null)
             query = query.Where(i => i.Status == status);
@@ -108,7 +112,10 @@ public class InvoiceRepository : BaseRepository<Invoice>, IInvoiceRepository
         // Only load invoices that could have an outstanding balance
         var openStatuses = new[] { InvoiceStatus.Issued, InvoiceStatus.PartiallyPaid, InvoiceStatus.Overdue };
 
+        // AsNoTracking: same reasoning as GetByTenantPagedAsync — these entities are only
+        // summed in memory and discarded, never updated.
         var query = _dbSet
+            .AsNoTracking()
             .Where(i => i.TenantId == tenantId && openStatuses.Contains(i.Status));
 
         if (status is not null)

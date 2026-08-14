@@ -510,4 +510,89 @@ public class InvoiceTests
 
         invoice.OutstandingAmount.Should().Be(invoice.TotalAmount);
     }
+
+    // ── Financial calculations — rounding correctness ───────────────────────
+    //
+    // These lock in the fix from the financial-correctness audit: the invoice
+    // discount and tax chain now computes DiscountedSubtotal directly from
+    // full-precision Subtotal, and derives InvoiceDiscountAmount by subtraction,
+    // instead of rounding the discount and the discounted subtotal independently.
+
+    [Fact]
+    public void Subtotal_DiscountAmount_And_DiscountedSubtotal_AlwaysReconcile()
+    {
+        // Subtotal = InvoiceDiscountAmount + DiscountedSubtotal, exactly, regardless
+        // of whether the discount percentage produces a "clean" split.
+        var invoice = CreateDraftInvoice(taxRate: 0m, discount: 33.33m);
+        invoice.AddLineItem(MakeLineItem(unitPrice: 19.99m, qty: 7m));
+
+        invoice.InvoiceDiscountAmount.Add(invoice.DiscountedSubtotal)
+            .Should().Be(invoice.Subtotal);
+    }
+
+    [Fact]
+    public void TotalAmount_DiscountedSubtotal_And_TaxAmount_AlwaysReconcile()
+    {
+        // TotalAmount = DiscountedSubtotal + TaxAmount, by construction.
+        var invoice = CreateDraftInvoice(taxRate: 7.25m, discount: 15m);
+        invoice.AddLineItem(MakeLineItem(unitPrice: 42.37m, qty: 3m));
+
+        invoice.DiscountedSubtotal.Add(invoice.TaxAmount)
+            .Should().Be(invoice.TotalAmount);
+    }
+
+    [Fact]
+    public void DiscountedSubtotal_ComputedFromFullPrecisionSubtotal_NotFromDoubleRounding()
+    {
+        // Subtotal = 3 line items of 33.33 each = 99.99. 15% discount.
+        //
+        // Full precision: 99.99 * 0.85 = 84.9915 -> rounds to 84.99.
+        // (This particular case doesn't drift against the naive approach, but it
+        // pins the expected value so a future regression is caught immediately.)
+        var invoice = CreateDraftInvoice(taxRate: 0m, discount: 15m);
+        invoice.AddLineItem(MakeLineItem(unitPrice: 33.33m, qty: 3m));
+
+        invoice.Subtotal.Amount.Should().Be(99.99m);
+        invoice.DiscountedSubtotal.Amount.Should().Be(84.99m);
+        invoice.InvoiceDiscountAmount.Amount.Should().Be(15.00m);
+    }
+
+    [Fact]
+    public void TaxAmount_ZeroPercent_ProducesZeroTax()
+    {
+        var invoice = CreateDraftInvoice(taxRate: 0m, discount: 0m);
+        invoice.AddLineItem(MakeLineItem(unitPrice: 19.99m, qty: 5m));
+
+        invoice.TaxAmount.IsZero.Should().BeTrue();
+        invoice.TotalAmount.Should().Be(invoice.Subtotal);
+    }
+
+    [Fact]
+    public void TotalAmount_WithFullDiscount_IsZeroPlusTaxOnZero()
+    {
+        // A 100%-discounted invoice still computes cleanly: discounted subtotal is
+        // zero, so tax on zero is zero, so total is zero.
+        var invoice = CreateDraftInvoice(taxRate: 20m, discount: 100m);
+        invoice.AddLineItem(MakeLineItem(unitPrice: 250m));
+
+        invoice.DiscountedSubtotal.IsZero.Should().BeTrue();
+        invoice.TaxAmount.IsZero.Should().BeTrue();
+        invoice.TotalAmount.IsZero.Should().BeTrue();
+    }
+
+    [Fact]
+    public void TotalAmount_WithFractionalTaxAndDiscountRates_CalculatesCorrectly()
+    {
+        // Subtotal = 149.97 (49.99 x 3). 12.5% discount -> discounted subtotal.
+        // Full precision: 149.97 * 0.875 = 131.22375 -> rounds to 131.22.
+        // Tax at 8.25% on 131.22: 131.22 * 0.0825 = 10.82565 -> rounds to 10.83.
+        // Total = 131.22 + 10.83 = 142.05.
+        var invoice = CreateDraftInvoice(taxRate: 8.25m, discount: 12.5m);
+        invoice.AddLineItem(MakeLineItem(unitPrice: 49.99m, qty: 3m));
+
+        invoice.Subtotal.Amount.Should().Be(149.97m);
+        invoice.DiscountedSubtotal.Amount.Should().Be(131.22m);
+        invoice.TaxAmount.Amount.Should().Be(10.83m);
+        invoice.TotalAmount.Amount.Should().Be(142.05m);
+    }
 }

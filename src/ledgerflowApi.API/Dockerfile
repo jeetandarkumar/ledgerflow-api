@@ -27,6 +27,13 @@ RUN dotnet publish "ledgerflowApi.API.csproj" \
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final
 WORKDIR /app
 
+# curl is required by the HEALTHCHECK below and is not present on the base
+# aspnet runtime image — without this, the HEALTHCHECK instruction fails
+# with "curl: not found" and the container is reported unhealthy forever.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
 # Create a non-root user for security
 RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
 
@@ -41,7 +48,10 @@ USER appuser
 EXPOSE 8080
 EXPOSE 8081
 
+# Liveness only — checks the process is up and responsive, not that its
+# dependencies (SQL Server, Redis) are reachable. Use GET /health/ready
+# (or /health) from outside the container for a dependency-aware readiness check.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+    CMD curl -f http://localhost:8080/health/live || exit 1
 
 ENTRYPOINT ["dotnet", "ledgerflowApi.API.dll"]

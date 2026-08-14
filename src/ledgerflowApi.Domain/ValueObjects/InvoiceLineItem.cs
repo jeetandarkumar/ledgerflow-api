@@ -72,18 +72,38 @@ public sealed class InvoiceLineItem : IEquatable<InvoiceLineItem>
 
     /// <summary>
     /// Gross subtotal before discount: UnitPrice × Quantity.
+    /// This is itself a genuine line total (what the line would cost with no discount),
+    /// so it is rounded to 2dp here — the same as any other displayed monetary value.
     /// </summary>
     public Money GrossAmount => UnitPrice.Multiply(Quantity);
 
     /// <summary>
-    /// The monetary value of the discount applied to this line.
+    /// Net amount after the line-level discount: what the customer actually pays for this line.
+    ///
+    /// Computed directly from full-precision inputs (UnitPrice × Quantity × (1 − discount%))
+    /// rather than by applying the discount to the already-rounded <see cref="GrossAmount"/>.
+    /// Rounding <c>GrossAmount</c> first and then discounting the rounded value would round
+    /// twice and could drift the final line total by a cent versus computing it in one pass.
+    /// This is the only place NetAmount is computed — it is the source of truth for the line.
     /// </summary>
-    public Money DiscountAmount => GrossAmount.Multiply(DiscountPercentage / 100m);
+    public Money NetAmount
+    {
+        get
+        {
+            var fullPrecisionNet = UnitPrice.Amount * Quantity * (1m - DiscountPercentage / 100m);
+            return new Money(fullPrecisionNet, UnitPrice.Currency);
+        }
+    }
 
     /// <summary>
-    /// Net amount after the line-level discount: what the customer actually pays for this line.
+    /// The monetary value of the discount applied to this line.
+    ///
+    /// Derived as GrossAmount − NetAmount rather than computed independently, so the three
+    /// figures always reconcile exactly (Gross = Discount + Net) on the printed invoice —
+    /// computing it separately from GrossAmount could otherwise be off by a cent from NetAmount
+    /// due to two independent roundings of related quantities.
     /// </summary>
-    public Money NetAmount => GrossAmount.ApplyDiscount(DiscountPercentage);
+    public Money DiscountAmount => GrossAmount.Subtract(NetAmount);
 
     public override string ToString() =>
         $"{Description} × {Quantity} @ {UnitPrice}" +

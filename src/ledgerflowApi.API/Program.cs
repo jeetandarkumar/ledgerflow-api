@@ -1,11 +1,16 @@
+using ledgerflowApi.API.BackgroundServices;
 using ledgerflowApi.API.Extensions;
+using ledgerflowApi.API.HealthChecks;
 using ledgerflowApi.API.Middleware;
 using ledgerflowApi.API.Persistence;
 using ledgerflowApi.Application.Common.Interfaces;
 using ledgerflowApi.Application.DependencyInjection;
 using ledgerflowApi.Infrastructure.DependencyInjection;
+using ledgerflowApi.Infrastructure.HealthChecks;
 using ledgerflowApi.Infrastructure.Persistence;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Serilog;
 
 Log.Logger = new LoggerConfiguration()
@@ -50,7 +55,16 @@ try
         });
     });
 
-    builder.Services.AddHealthChecks();
+    builder.Services
+        .AddHealthChecks()
+        .AddCheck<SqlServerHealthCheck>("sql-server", tags: ["ready"])
+        .AddCheck<RedisHealthCheck>("redis", tags: ["ready"]);
+
+    // Skipped in the "Testing" environment (WebApplicationFactory-based integration tests)
+    // so tests can invoke ProcessOverdueInvoicesAsync directly and deterministically instead
+    // of racing a background timer.
+    if (!builder.Environment.IsEnvironment("Testing"))
+        builder.Services.AddHostedService<OverdueInvoiceProcessingService>();
 
     var app = builder.Build();
 
@@ -80,7 +94,32 @@ try
     app.UseAuthorization();
 
     app.MapControllers();
-    app.MapHealthChecks("/health");
+
+    // Liveness: is the process itself up and able to handle a request? No dependency checks —
+    // this is what an orchestrator should use to decide "restart the container", since a
+    // transient DB blip shouldn't trigger a restart of an otherwise-healthy process.
+    app.MapHealthChecks("/health/live", new HealthCheckOptions
+    {
+        Predicate = _ => false,
+        ResponseWriter = HealthCheckResponseWriter.WriteResponse
+    });
+
+    // Readiness: can the app actually serve traffic right now? Runs every check tagged
+    // "ready" (SQL Server, Redis) — this is what should gate load-balancer routing.
+    app.MapHealthChecks("/health/ready", new HealthCheckOptions
+    {
+        Predicate = check => check.Tags.Contains("ready"),
+        ResponseWriter = HealthCheckResponseWriter.WriteResponse
+    });
+
+    // Kept for backward compatibility with the existing Docker healthcheck, Postman
+    // collection, and TenantResolutionMiddleware's bypass list — behaves the same as
+    // /health/ready.
+    app.MapHealthChecks("/health", new HealthCheckOptions
+    {
+        Predicate = check => check.Tags.Contains("ready"),
+        ResponseWriter = HealthCheckResponseWriter.WriteResponse
+    });
 
     app.Run();
 }

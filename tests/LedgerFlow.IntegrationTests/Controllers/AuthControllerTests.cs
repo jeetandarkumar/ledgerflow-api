@@ -82,7 +82,6 @@ public class AuthControllerTests : IntegrationTestBase
         var body = await response.Content.ReadFromJsonAsync<LoginResponseDto>();
         body.Should().NotBeNull();
         body!.AccessToken.Should().NotBeNullOrEmpty();
-        body!.RefreshToken.Should().NotBeNullOrEmpty();
         body!.User.Email.Should().Be("alice@acme.com");
     }
 
@@ -221,7 +220,6 @@ public class AuthControllerTests : IntegrationTestBase
 
     private sealed record LoginResponseDto(
         string AccessToken,
-        string RefreshToken,
         DateTime ExpiresAt,
         UserInfoDto User);
 

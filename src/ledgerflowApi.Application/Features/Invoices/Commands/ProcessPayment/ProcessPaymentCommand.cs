@@ -7,6 +7,7 @@ using ledgerflowApi.Domain.Interfaces;
 using ledgerflowApi.Domain.ValueObjects;
 using FluentValidation;
 using MediatR;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
 namespace ledgerflowApi.Application.Features.Invoices.Commands.ProcessPayment;
@@ -196,6 +197,34 @@ public sealed class ProcessPaymentCommandHandler
         var invoiceStatusBefore = invoice.Status.Value;
         var paidAmountBefore = invoice.PaidAmount.Amount;
 
+        // ── Step 2.5: Re-check idempotency immediately before mutating anything ─
+        // Step 1's check and this point are separated by an awaited DB round trip
+        // (loading the invoice above) — long enough for a concurrent request with
+        // the same ExternalReference to have fully committed in between. Re-checking
+        // here, before any domain mutation or write, closes that window: if another
+        // request already won, we return its committed payment instead of creating
+        // a duplicate. Checked here (not later) so `invoice` is still exactly what
+        // was just read from the database — no in-memory mutation to worry about
+        // when building the response from it.
+        // This is what actually fixes the concurrent-duplicate-request case; the
+        // DbUpdateConcurrencyException handling in Step 7 is the backstop for the
+        // much narrower window that remains after this check.
+        if (request.PaymentType != "Refund" && !string.IsNullOrWhiteSpace(request.ExternalReference))
+        {
+            var raceWinner = await _paymentRepository.GetByExternalReferenceAsync(
+                request.ExternalReference, cancellationToken);
+
+            if (raceWinner is not null)
+            {
+                _logger.LogWarning(
+                    "Duplicate payment processing attempt for ExternalReference {Ref} detected just before " +
+                    "any mutation (lost the race to another request). Returning existing payment {PaymentId}.",
+                    request.ExternalReference, raceWinner.Id);
+
+                return Result<PaymentResponse>.Success(BuildResponse(raceWinner, invoice));
+            }
+        }
+
         // ── Step 3: Refund-specific validation ────────────────────────────────
         Payment? originalPayment = null;
         if (request.PaymentType == "Refund")
@@ -213,9 +242,21 @@ public sealed class ProcessPaymentCommandHandler
                 return Result<PaymentResponse>.Failure(
                     "The original payment does not belong to the specified invoice.");
 
-            if (!originalPayment.Status.IsCompleted)
-                return Result<PaymentResponse>.Failure(
-                    $"Only Completed payments can be refunded. Original payment status: {originalPayment.Status.Value}.");
+            // Enforces "total refunds against a payment can never exceed what was originally
+            // paid" and increments the running RefundedAmount on the original payment. This
+            // is also what makes two concurrent refund requests against the same original
+            // payment safe: both mutate this same in-memory instance's RowVersion-tracked
+            // state, and only one of the two resulting UPDATE statements can win when the
+            // transaction commits below (see the DbUpdateConcurrencyException handling in
+            // Step 7, and Payment.ApplyRefund's doc comment for the full explanation).
+            try
+            {
+                originalPayment.ApplyRefund(paymentAmount);
+            }
+            catch (DomainException ex)
+            {
+                return Result<PaymentResponse>.Failure(ex.Message);
+            }
         }
 
         // ── Step 4: Create the Payment aggregate ──────────────────────────────
@@ -246,29 +287,86 @@ public sealed class ProcessPaymentCommandHandler
         else
             invoice.RecordPayment(paymentAmount, request.TenantId);
 
-        // ── Step 7: Persist all three writes atomically ───────────────────────
-        await _unitOfWork.ExecuteInTransactionAsync(async () =>
+        // ── Step 7: Persist all writes atomically ──────────────────────────────
+        try
         {
-            await _paymentRepository.AddAsync(payment, cancellationToken);
-            await _invoiceRepository.UpdateAsync(invoice, cancellationToken);
+            await _unitOfWork.ExecuteInTransactionAsync(async () =>
+            {
+                await _paymentRepository.AddAsync(payment, cancellationToken);
+                await _invoiceRepository.UpdateAsync(invoice, cancellationToken);
 
-            var auditDescription = request.PaymentType == "Refund"
-                ? $"Refund of {paymentAmount} applied to invoice {invoice.InvoiceNumber}. " +
-                  $"Invoice status: {invoiceStatusBefore} → {invoice.Status.Value}."
-                : $"Payment of {paymentAmount} received for invoice {invoice.InvoiceNumber}. " +
-                  $"Invoice status: {invoiceStatusBefore} → {invoice.Status.Value}.";
+                // For refunds, the original payment's RefundedAmount (and RowVersion) were
+                // mutated in Step 3 via ApplyRefund() — persist that in the same transaction
+                // as the new refund row and the invoice update, so all three either commit
+                // or roll back together.
+                if (originalPayment is not null)
+                    await _paymentRepository.UpdateAsync(originalPayment, cancellationToken);
 
-            var audit = AuditLog.ForPayment(
-                tenantId: request.TenantId,
-                invoiceId: invoice.Id,
-                paymentId: payment.Id,
-                isRefund: request.PaymentType == "Refund",
-                amountDisplay: paymentAmount.ToString(),
-                userId: request.InitiatedByUserId,
-                correlationId: null);
+                var auditDescription = request.PaymentType == "Refund"
+                    ? $"Refund of {paymentAmount} applied to invoice {invoice.InvoiceNumber}. " +
+                      $"Invoice status: {invoiceStatusBefore} → {invoice.Status.Value}."
+                    : $"Payment of {paymentAmount} received for invoice {invoice.InvoiceNumber}. " +
+                      $"Invoice status: {invoiceStatusBefore} → {invoice.Status.Value}.";
 
-            await _auditLogRepository.AddAsync(audit, cancellationToken);
-        }, cancellationToken);
+                var audit = AuditLog.ForPayment(
+                    tenantId: request.TenantId,
+                    invoiceId: invoice.Id,
+                    paymentId: payment.Id,
+                    isRefund: request.PaymentType == "Refund",
+                    amountDisplay: paymentAmount.ToString(),
+                    userId: request.InitiatedByUserId,
+                    correlationId: null);
+
+                await _auditLogRepository.AddAsync(audit, cancellationToken);
+            }, cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException ex)
+        {
+            // Reachable in three cases, all guarded by an existing optimistic
+            // concurrency token and handled cleanly instead of surfacing as a 500:
+            //  - Two payments/refunds processed concurrently against the same invoice
+            //    (Invoice.UpdatedAt is a concurrency token — see InvoiceConfiguration).
+            //  - Two refunds processed concurrently against the same original payment
+            //    (Payment.RowVersion — see Payment.ApplyRefund's doc comment).
+            //  - Two Standard payments with the same ExternalReference, racing tightly
+            //    enough that both passed the Step 2.5 idempotency check before either
+            //    committed. The Step 2.5 check closes the common case (one request
+            //    fully finishes before the other reaches that point); this is the
+            //    backstop for the rarer case where both are neck-and-neck.
+            // Either way, nothing from this request was persisted (the transaction
+            // rolled back) — the question is just what to tell the caller.
+            _logger.LogWarning(
+                ex,
+                "Payment processing for invoice {InvoiceId} conflicted with a concurrent update. Rolled back, no data corrupted.",
+                request.InvoiceId);
+
+            // For the ExternalReference case specifically, the conflict almost certainly
+            // means the other side of the race just committed the payment we were about
+            // to create — so resolve idempotently to it rather than asking the caller to
+            // retry a request that would just find the same "duplicate" again.
+            //
+            // Note on the invoice snapshot returned here: `invoice` is already tracked by
+            // this request's DbContext and was mutated in memory by Step 6's RecordPayment
+            // call. Querying for it again would return that same tracked (and now stale)
+            // instance rather than a fresh read — EF Core does not overwrite an already-
+            // tracked, modified entity's in-memory values from a subsequent query. Using it
+            // as-is is correct for the expected case (the winning request applied the same
+            // amount, since this is a genuine duplicate submission), and this is only a
+            // fallback for the narrow window Step 2.5 doesn't already close. A client that
+            // needs a guaranteed-fresh view can always follow up with a plain GET.
+            if (request.PaymentType != "Refund" && !string.IsNullOrWhiteSpace(request.ExternalReference))
+            {
+                var raceWinner = await _paymentRepository.GetByExternalReferenceAsync(
+                    request.ExternalReference, cancellationToken);
+
+                if (raceWinner is not null)
+                    return Result<PaymentResponse>.Success(BuildResponse(raceWinner, invoice));
+            }
+
+            return Result<PaymentResponse>.Failure(
+                "This invoice or payment was updated by another request at the same time. " +
+                "Please refresh and try again.");
+        }
 
         _logger.LogInformation(
             "{PaymentType} of {Amount} {Currency} processed for invoice {InvoiceNumber} (ID: {InvoiceId}). " +

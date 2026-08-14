@@ -108,10 +108,11 @@ All routes are tenant-scoped. The tenant is resolved from the `tenant_id` claim 
 
 | Method | Route | Auth | Description |
 |---|---|---|---|
-| POST | `/api/v1/auth/login` | None | Returns JWT + refresh token |
+| POST | `/api/v1/auth/login` | None | Returns a JWT access token |
 | POST | `/api/v1/auth/register` | Admin | Creates a new user in the caller's tenant |
 
-Login requires the `X-Tenant-Id` header (tenant GUID). On success you get an `accessToken` (60 min) and a `refreshToken`.
+Login requires the `X-Tenant-Id` header (tenant GUID). On success you get an `accessToken`
+that expires after 60 minutes — there is no refresh token (see Known Limitations below).
 
 **Login request:**
 ```json
@@ -128,7 +129,6 @@ X-Tenant-Id: <tenant-guid>
 ```json
 {
   "accessToken": "eyJ...",
-  "refreshToken": "base64string",
   "expiresAt": "2025-01-01T01:00:00Z",
   "user": {
     "id": "...",
@@ -191,7 +191,9 @@ Draft ──► Issued ──► PartiallyPaid ──► Paid
 
 ### Payments
 
-Payments go against an issued invoice. Refunds are a separate payment record with `"type": "Refund"` linked to the original via `refundedPaymentId`. The original payment record is never mutated — the ledger is append-only.
+Payments go against an issued invoice. Refunds are a separate payment record with `"type": "Refund"` linked to the original via `refundedPaymentId`.
+
+Core fields (`Amount`, `Currency`, `Type`) are set once and never change after creation. The one exception: processing a refund updates the *original* payment's `RefundedAmount` — a running total of how much of that payment has been refunded so far — so a payment can never be refunded for more than it was originally worth, even across several partial refunds. Applying a payment or refund also updates the invoice's `PaidAmount` and recalculates its status (`Issued` → `PartiallyPaid` → `Paid`, or back down on a refund); `RecordPayment` rejects any amount that would push `PaidAmount` above the invoice total, and `ApplyRefund` rejects any refund that would exceed what's left refundable on the original payment.
 
 ```json
 POST /api/v1/invoices/{id}/payments
@@ -206,7 +208,12 @@ Authorization: Bearer <token>
 }
 ```
 
-Submitting the same `externalReference` twice returns the existing payment — idempotent by design for webhook replay safety.
+**Idempotency (`externalReference`)** — submitting the same `externalReference` twice returns the existing payment instead of creating a duplicate, including under concurrent submission. This is enforced in layers rather than by a single check:
+1. An early lookup before any work begins — the fast path for the common, non-concurrent case.
+2. A second lookup immediately before the write, closing the window where a concurrent duplicate request committed in between the first lookup and this request's own write.
+3. A database-level unique index (`UX_Payments_ExternalReference`, filtered on non-null references) as the last-resort backstop for relational deployments, paired with concurrency-conflict handling that resolves to the winning payment instead of surfacing an error if two requests still land on layer 3 simultaneously.
+
+**Concurrency** — `Invoice.UpdatedAt` is an optimistic concurrency token, so two payments or refunds racing against the same invoice can't both silently apply: the loser's write is rejected rather than corrupting `PaidAmount`, and is resolved the same way as an idempotency conflict where applicable. `Payment.RowVersion` gives the same protection specifically for two refunds racing against the same original payment. This is exercised directly by integration tests, including genuinely concurrent requests fired with `Task.WhenAll` — see Running Tests for what those tests do and don't prove.
 
 ---
 
@@ -226,6 +233,8 @@ Submitting the same `externalReference` twice returns the existing payment — i
 | Member | Create and issue invoices, record payments |
 | Admin | Everything above + register users, void invoices |
 | SuperAdmin | Platform-level (not assignable via API) |
+
+`SuperAdmin` is blocked from assignment at three independent layers — the `RegisterUserCommand` validator, the `User` factory method, and the role-change method — so the restriction holds even if one of those call paths is bypassed or extended later.
 
 ---
 
@@ -260,15 +269,27 @@ All 429 responses include a `Retry-After` header.
 ## Running Tests
 
 ```bash
-dotnet test tests/CleanArch.UnitTests
-dotnet test tests/CleanArch.IntegrationTests
+dotnet test tests/LedgerFlow.UnitTests
+dotnet test tests/LedgerFlow.IntegrationTests
 ```
+
+**Unit tests** (`LedgerFlow.UnitTests`) cover the domain layer directly — invoice lifecycle transitions, the `Money` and `InvoiceStatus` value objects, command handlers (login, create/issue/void invoice, process payment), validators, and the password hasher / token service.
+
+**Integration tests** (`LedgerFlow.IntegrationTests`) run against a real in-process HTTP pipeline via `WebApplicationFactory` (`LedgerFlowWebApplicationFactory`), covering auth, invoice, and payment/tenant-isolation flows end to end through actual controller and middleware code — not mocks. The database underneath is EF Core's **InMemory provider**, not SQL Server: real for exercising application code, controllers, middleware, and EF Core's own optimistic-concurrency tracking (`Invoice.UpdatedAt`, `Payment.RowVersion`), but it does **not** enforce relational constructs like the unique index on `ExternalReference` — so the DB-level idempotency backstop described under Payments is a real, migrated constraint that runs against SQL Server, but is not itself exercised by this suite. What the concurrency and idempotency tests in `PaymentRefundConcurrencyTests` actually verify — including genuinely concurrent requests fired with `Task.WhenAll` against the same invoice, the same original payment, and the same `externalReference` — is the *application-level* idempotency checks and the optimistic-concurrency tokens, end to end through real HTTP requests. That's a meaningful, real guarantee, just not the same claim as "the database constraint is tested."
+
+Together the two suites run close to 300 tests (253 unit, 44 integration, as of the latest verified local run).
 
 ---
 
 ## CI/CD
 
-GitHub Actions runs on push to `dev`, `uat`, and `main`. Tests run on all branches. Deployment to IIS runs only on `main`.
+GitHub Actions triggers on push to `Dev` and runs a single pipeline with three sequential jobs, gated by GitHub Environments:
+
+1. **DEV** — restores, builds, runs the unit test suite, publishes results, and deploys straight to the DEV IIS site. Runs automatically.
+2. **UAT** — waits for DEV to succeed (`needs: dev`), then runs the full integration test suite (`LedgerFlow.IntegrationTests`, via `WebApplicationFactory`) against a build of the solution, publishes results, and deploys to UAT. The `UAT` environment is configured with a required reviewer, so the job pauses for manual approval before it runs.
+3. **PROD** — waits for UAT to succeed, then deploys to PROD. The `PROD` environment also requires manual approval.
+
+Each stage only runs after the previous one has passed, so nothing reaches UAT without a green unit-test build, and nothing reaches PROD without a green integration-test build and a human approval at each gate.
 
 See `.github/workflows/ci-cd.yml`.
 
@@ -294,6 +315,10 @@ The **Error Scenarios** folder covers 401, 403, 422, and 429 responses.
 
 ## Known Limitations
 
-- No `/auth/refresh` endpoint — refresh tokens are issued but rotation is not yet implemented
-- Integration tests are placeholder only — `WebApplicationFactory`-based tests are the next planned addition
+- No refresh tokens — an earlier version issued one on login, but nothing persisted or
+  validated it server-side, so it was a token in the API contract that could never actually
+  be redeemed. Removed until refresh persistence, rotation, and a `/auth/refresh` endpoint are
+  built together as one real feature. `ITokenService.GenerateRefreshToken` still exists and is
+  unit-tested, ready for that work — access tokens currently expire after 60 minutes and the
+  client must log in again.
 - `GET /users` list endpoint not yet implemented — only `GET /users/{id}` exists
