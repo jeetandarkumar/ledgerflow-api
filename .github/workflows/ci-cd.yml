@@ -72,6 +72,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Promote the exact Dev commit that passed the DEV job into UAT.
+      - name: Promote Dev to UAT
+        shell: powershell
+        run: |
+          git fetch origin Dev UAT
+
+          git checkout UAT
+          git reset --hard origin/UAT
+
+          git merge origin/Dev --no-edit
+
+          git push origin UAT 
+
       - name: Restore
         run: dotnet restore ledgerflowApi.sln
 
@@ -116,6 +129,19 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      # Promote the UAT branch into main before deploying PROD.
+      - name: Promote UAT to Main
+        shell: powershell
+        run: |
+          git fetch origin UAT main
+
+          git checkout main
+          git reset --hard origin/main
+
+          git merge origin/UAT --no-edit
+
+          git push origin main
 
       - name: Restore
         run: dotnet restore ledgerflowApi.sln

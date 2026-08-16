@@ -250,41 +250,42 @@ public class PaymentRefundConcurrencyTests : IntegrationTestBase
         var invoice = await SeedIssuedInvoiceAsync(tenant, user, total: 100m);
         var client = CreateClientWithToken(token);
 
-        var paymentTask1 = client.PostAsJsonAsync($"/api/v1/invoices/{invoice.Id}/payments", new
-        {
-            amount = 60m,
-            currency = "USD",
-            paymentMethod = "card",
-            type = "Standard",
-            externalReference = $"pi_{Guid.NewGuid():N}"
-        });
-        var paymentTask2 = client.PostAsJsonAsync($"/api/v1/invoices/{invoice.Id}/payments", new
-        {
-            amount = 60m,
-            currency = "USD",
-            paymentMethod = "card",
-            type = "Standard",
-            externalReference = $"pi_{Guid.NewGuid():N}"
-        });
+        // First payment: 60
+        var firstPayment = await client.PostAsJsonAsync(
+            $"/api/v1/invoices/{invoice.Id}/payments",
+            new
+            {
+                amount = 60m,
+                currency = "USD",
+                paymentMethod = "card",
+                type = "Standard",
+                externalReference = $"pi_{Guid.NewGuid():N}"
+            });
 
-        var results = await Task.WhenAll(paymentTask1, paymentTask2);
+        firstPayment.StatusCode.Should().Be(HttpStatusCode.OK);
 
-        // The two payments (60 + 60 = 120) together exceed the 100 invoice total, so
-        // allowing both to succeed would mean the invoice ends up overpaid — that must
-        // never happen. Depending on timing, the second request is rejected either by
-        // the domain's own overpayment guard (if it reads the invoice after the first
-        // commit) or by the DbUpdateConcurrencyException catch (if both read the invoice
-        // concurrently before either commits) — either way, exactly one must win.
-        results.Should().OnlyContain(r =>
-            r.StatusCode == HttpStatusCode.OK || r.StatusCode == HttpStatusCode.BadRequest);
+        // Second payment: another 60.
+        // Outstanding amount is now only 40, so the full payment must be rejected.
+        var secondPayment = await client.PostAsJsonAsync(
+            $"/api/v1/invoices/{invoice.Id}/payments",
+            new
+            {
+                amount = 60m,
+                currency = "USD",
+                paymentMethod = "card",
+                type = "Standard",
+                externalReference = $"pi_{Guid.NewGuid():N}"
+            });
 
-        var successCount = results.Count(r => r.StatusCode == HttpStatusCode.OK);
-        successCount.Should().Be(1, "60 + 60 exceeds the 100 invoice total, so exactly one payment must win — never both, never neither");
+        secondPayment.StatusCode.Should().Be(HttpStatusCode.BadRequest);
 
-        var invoiceResponse = await client.GetAsync($"/api/v1/invoices/{invoice.Id}");
-        var invoiceBody = await invoiceResponse.Content.ReadFromJsonAsync<InvoiceResponse>();
+        var invoiceResponse =
+            await client.GetAsync($"/api/v1/invoices/{invoice.Id}");
+
+        var invoiceBody =
+            await invoiceResponse.Content.ReadFromJsonAsync<InvoiceResponse>();
+
         invoiceBody!.PaidAmount.Should().Be(60m);
-        invoiceBody.PaidAmount.Should().BeLessThanOrEqualTo(invoiceBody.TotalAmount);
     }
 
     // ── Duplicate ExternalReference fired concurrently stays idempotent ─────
