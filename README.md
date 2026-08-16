@@ -4,7 +4,7 @@ A multi-tenant financial API built with .NET 8, Clean Architecture, and a full D
 
 Built as a portfolio project — not a toy CRUD app.
 
----
+-----
 
 ## What's in here
 
