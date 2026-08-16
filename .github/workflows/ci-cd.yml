@@ -76,7 +76,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Promote only the commit that triggered this workflow.
+      # Promote only the exact Dev commit that triggered this workflow.
       - name: Promote Dev commit to UAT
         id: promote
         shell: powershell
@@ -86,11 +86,6 @@ jobs:
           git checkout UAT
           git reset --hard origin/UAT
 
-<<<<<<< Updated upstream
-          git cherry-pick $env:GITHUB_SHA
-
-          git push origin UAT
-=======
           if (git merge-base --is-ancestor $env:GITHUB_SHA origin/UAT) {
               Write-Host "Commit $env:GITHUB_SHA is already present in UAT."
           }
@@ -110,7 +105,6 @@ jobs:
                   exit 1
               }
           }
->>>>>>> Stashed changes
 
           $promotedSha = (git rev-parse HEAD).Trim()
           "promoted_sha=$promotedSha" >> $env:GITHUB_OUTPUT
@@ -170,11 +164,7 @@ jobs:
           git checkout main
           git reset --hard origin/main
 
-<<<<<<< Updated upstream
-          git cherry-pick ${{ needs.uat.outputs.promoted_sha }}
-=======
           $promotedSha = "${{ needs.uat.outputs.promoted_sha }}"
->>>>>>> Stashed changes
 
           if (git merge-base --is-ancestor $promotedSha origin/main) {
               Write-Host "Commit $promotedSha is already present in main."
