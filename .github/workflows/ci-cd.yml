@@ -86,9 +86,31 @@ jobs:
           git checkout UAT
           git reset --hard origin/UAT
 
+<<<<<<< Updated upstream
           git cherry-pick $env:GITHUB_SHA
 
           git push origin UAT
+=======
+          if (git merge-base --is-ancestor $env:GITHUB_SHA origin/UAT) {
+              Write-Host "Commit $env:GITHUB_SHA is already present in UAT."
+          }
+          else {
+              git cherry-pick $env:GITHUB_SHA
+
+              if ($LASTEXITCODE -ne 0) {
+                  Write-Error "Failed to cherry-pick Dev commit $env:GITHUB_SHA into UAT."
+                  git cherry-pick --abort
+                  exit 1
+              }
+
+              git push origin UAT
+
+              if ($LASTEXITCODE -ne 0) {
+                  Write-Error "Failed to push UAT branch."
+                  exit 1
+              }
+          }
+>>>>>>> Stashed changes
 
           $promotedSha = (git rev-parse HEAD).Trim()
           "promoted_sha=$promotedSha" >> $env:GITHUB_OUTPUT
@@ -148,9 +170,31 @@ jobs:
           git checkout main
           git reset --hard origin/main
 
+<<<<<<< Updated upstream
           git cherry-pick ${{ needs.uat.outputs.promoted_sha }}
+=======
+          $promotedSha = "${{ needs.uat.outputs.promoted_sha }}"
+>>>>>>> Stashed changes
 
-          git push origin main
+          if (git merge-base --is-ancestor $promotedSha origin/main) {
+              Write-Host "Commit $promotedSha is already present in main."
+          }
+          else {
+              git cherry-pick $promotedSha
+
+              if ($LASTEXITCODE -ne 0) {
+                  Write-Error "Failed to cherry-pick UAT commit $promotedSha into main."
+                  git cherry-pick --abort
+                  exit 1
+              }
+
+              git push origin main
+
+              if ($LASTEXITCODE -ne 0) {
+                  Write-Error "Failed to push main branch."
+                  exit 1
+              }
+          }
 
       - name: Restore
         run: dotnet restore ledgerflowApi.sln
